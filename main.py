@@ -499,7 +499,11 @@ def run_full_analysis(
             # 如果有结果，赋值给 market_report 用于后续飞书文档生成
             if review_result:
                 market_report = review_result
-
+                
+        # === DEBUG: 打印合并推送状态 ===        
+        logger.info(f"[DEBUG] merge_notification={merge_notification}, "
+            f"results_len={len(results) if results else 0}, "
+            f"market_report_len={len(market_report) if market_report else 0}")
         # Issue #190: 合并推送（个股+大盘复盘）
         if merge_notification and (results or market_report) and not args.no_notify:
             parts = []
