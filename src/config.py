@@ -889,6 +889,11 @@ class Config:
     report_integrity_retry: int = 1  # Retry count when mandatory fields missing (0 = placeholder only)
     report_history_compare_n: int = 0  # History comparison count (0 = disabled)
 
+    # Report export formats (HTML/PDF)
+    report_html_enabled: bool = True  # Generate HTML report alongside Markdown (default on)
+    report_pdf_enabled: bool = False  # Generate PDF report via xhtml2pdf (default off, opt-in)
+    report_attach_to_channels: bool = True  # Push generated HTML/PDF files as attachments to channels
+
     # PushPlus 推送配置
     pushplus_token: Optional[str] = None  # PushPlus Token
     pushplus_topic: Optional[str] = None  # PushPlus 群组编码（一对多推送）
@@ -1747,6 +1752,9 @@ class Config:
             report_integrity_enabled=os.getenv('REPORT_INTEGRITY_ENABLED', 'true').lower() == 'true',
             report_integrity_retry=parse_env_int(os.getenv('REPORT_INTEGRITY_RETRY'), 1, field_name='REPORT_INTEGRITY_RETRY', minimum=0),
             report_history_compare_n=parse_env_int(os.getenv('REPORT_HISTORY_COMPARE_N'), 0, field_name='REPORT_HISTORY_COMPARE_N', minimum=0),
+            report_html_enabled=os.getenv('REPORT_HTML_ENABLED', 'true').lower() == 'true',
+            report_pdf_enabled=os.getenv('REPORT_PDF_ENABLED', 'false').lower() == 'true',
+            report_attach_to_channels=os.getenv('REPORT_ATTACH_TO_CHANNELS', 'true').lower() == 'true',
             analysis_delay=parse_env_float(os.getenv('ANALYSIS_DELAY'), 0.0, field_name='ANALYSIS_DELAY', minimum=0.0),
             merge_email_notification=os.getenv('MERGE_EMAIL_NOTIFICATION', 'false').lower() == 'true',
             feishu_max_bytes=parse_env_int(os.getenv('FEISHU_MAX_BYTES'), 20000, field_name='FEISHU_MAX_BYTES', minimum=1),

@@ -17,6 +17,7 @@ A股自选股智能分析系统 - 通知层
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -2456,15 +2457,130 @@ class NotificationService(
         reports_dir.mkdir(parents=True, exist_ok=True)
         
         filepath = reports_dir / filename
-        
+
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        
+
         logger.info(f"日报已保存到: {filepath}")
         return str(filepath)
 
+    def save_report_all_formats(
+        self,
+        content: str,
+        date_str: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """
+        将日报保存为多种格式（Markdown 始终生成，HTML/PDF 按配置开关）。
 
-class NotificationBuilder:
+        Args:
+            content: 日报 Markdown 内容
+            date_str: 日期串（默认今天 YYYYMMDD），用于统一文件名
+
+        Returns:
+            格式到文件路径的映射，如 {'md': '.../report_20240102.md', 'html': ..., 'pdf': ...}
+        """
+        from pathlib import Path
+
+        if date_str is None:
+            date_str = datetime.now().strftime('%Y%m%d')
+
+        reports_dir = Path(__file__).parent.parent / 'reports'
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        config = get_config()
+        outputs: Dict[str, str] = {}
+
+        # Markdown：始终生成（保持原有行为）
+        md_path = reports_dir / f"report_{date_str}.md"
+        try:
+            with open(md_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            outputs['md'] = str(md_path)
+            logger.info(f"日报已保存到: {md_path}")
+        except Exception as e:
+            logger.error(f"保存 Markdown 报告失败: {e}")
+
+        # HTML：默认开启
+        if getattr(config, 'report_html_enabled', True):
+            try:
+                from src.services.report_exporter import render_html
+                html_path = reports_dir / f"report_{date_str}.html"
+                with open(html_path, 'w', encoding='utf-8') as f:
+                    f.write(render_html(content))
+                outputs['html'] = str(html_path)
+                logger.info(f"HTML 报告已保存到: {html_path}")
+            except Exception as e:
+                logger.error(f"生成 HTML 报告失败: {e}")
+
+        # PDF：默认关闭，需 REPORT_PDF_ENABLED=true 开启
+        if getattr(config, 'report_pdf_enabled', False):
+            try:
+                from src.services.report_exporter import render_pdf
+                pdf_bytes = render_pdf(content)
+                if pdf_bytes:
+                    pdf_path = reports_dir / f"report_{date_str}.pdf"
+                    with open(pdf_path, 'wb') as f:
+                        f.write(pdf_bytes)
+                    outputs['pdf'] = str(pdf_path)
+                    logger.info(f"PDF 报告已保存到: {pdf_path}")
+                else:
+                    logger.warning("PDF 报告生成失败（render_pdf 返回 None），已跳过")
+            except Exception as e:
+                logger.error(f"生成 PDF 报告失败: {e}")
+
+        return outputs
+
+    def send_report_attachments(self, file_paths: Dict[str, str]) -> bool:
+        """
+        将生成的报告文件作为附件推送到支持文件附件的渠道（Discord、邮件）。
+
+        其它渠道不支持任意文件附件，保持纯文本/图片推送不受影响。
+
+        Args:
+            file_paths: 格式到路径的映射（来自 save_report_all_formats）
+
+        Returns:
+            是否至少有一个渠道附件推送成功
+        """
+        config = get_config()
+        if not getattr(config, 'report_attach_to_channels', True):
+            logger.debug("report_attach_to_channels 关闭，跳过附件推送")
+            return False
+
+        # 仅推送 HTML / PDF（Markdown 已在正文/本地，无需附件）
+        attachments = [
+            path for fmt, path in (file_paths or {}).items()
+            if fmt in ('html', 'pdf') and path
+        ]
+        if not attachments:
+            return False
+
+        any_success = False
+
+        # Discord：逐个文件上传
+        if NotificationChannel.DISCORD in self._available_channels:
+            try:
+                for path in attachments:
+                    if self.send_file_to_discord(path, content=f"📎 {os.path.basename(path)}"):
+                        any_success = True
+            except Exception as e:
+                logger.error(f"Discord 附件推送异常: {e}")
+
+        # 邮件：一封邮件带上所有附件
+        if NotificationChannel.EMAIL in self._available_channels:
+            try:
+                if self.send_to_email(
+                    "报告已生成，详见附件。",
+                    subject="📈 股票智能分析报告（附件）",
+                    attachments=attachments,
+                ):
+                    any_success = True
+            except Exception as e:
+                logger.error(f"邮件附件推送异常: {e}")
+
+        return any_success
+
+
     """
     通知消息构建器
     
@@ -2528,19 +2644,27 @@ def get_notification_service() -> NotificationService:
 def send_daily_report(results: List[AnalysisResult]) -> bool:
     """
     发送每日报告的快捷方式
-    
+
     自动识别渠道并推送
     """
     service = get_notification_service()
-    
+
     # 生成报告
     report = service.generate_daily_report(results)
-    
-    # 保存到本地
-    service.save_report_to_file(report)
-    
+
+    # 保存为多种格式（Markdown 始终，HTML 默认开，PDF 按开关）
+    report_files = service.save_report_all_formats(report)
+
     # 推送到配置的渠道（自动识别）
-    return service.send(report)
+    text_ok = service.send(report)
+
+    # 将 HTML/PDF 作为附件推送到支持文件附件的渠道（Discord、邮件）
+    try:
+        service.send_report_attachments(report_files)
+    except Exception as e:
+        logger.error(f"报告附件推送失败: {e}")
+
+    return text_ok
 
 
 if __name__ == "__main__":

@@ -69,16 +69,116 @@ class DiscordSender:
         logger.warning("Discord 配置不完整，跳过推送")
         return False
 
-  
+    def send_file_to_discord(
+        self,
+        file_path: str,
+        *,
+        content: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
+        """
+        以附件形式上传文件到 Discord（支持 Webhook 与 Bot API）。
+
+        Args:
+            file_path: 本地文件路径（如报告的 .html / .pdf）
+            content: 可选的附带文本说明
+            timeout_seconds: 请求超时
+
+        Returns:
+            是否发送成功
+        """
+        import os
+
+        if not file_path or not os.path.isfile(file_path):
+            logger.warning("Discord 附件不存在，跳过: %s", file_path)
+            return False
+
+        filename = os.path.basename(file_path)
+
+        if self._discord_config['webhook_url']:
+            return self._send_discord_file_webhook(
+                file_path, filename, content=content, timeout_seconds=timeout_seconds
+            )
+
+        if self._discord_config['bot_token'] and self._discord_config['channel_id']:
+            return self._send_discord_file_bot(
+                file_path, filename, content=content, timeout_seconds=timeout_seconds
+            )
+
+        logger.warning("Discord 配置不完整，跳过附件推送")
+        return False
+
+    def _send_discord_file_webhook(
+        self,
+        file_path: str,
+        filename: str,
+        *,
+        content: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
+        """使用 Webhook 以 multipart 形式上传文件附件。"""
+        try:
+            with open(file_path, 'rb') as fh:
+                files = {'file': (filename, fh)}
+                data = {'username': 'A股分析机器人'}
+                if content:
+                    data['content'] = content
+                response = requests.post(
+                    self._discord_config['webhook_url'],
+                    data=data,
+                    files=files,
+                    timeout=timeout_seconds or 30,
+                    verify=self._webhook_verify_ssl,
+                )
+            if response.status_code in [200, 204]:
+                logger.info("Discord Webhook 附件发送成功: %s", filename)
+                return True
+            logger.error("Discord Webhook 附件发送失败: %s %s", response.status_code, response.text)
+            return False
+        except Exception as e:
+            logger.error("Discord Webhook 附件发送异常: %s", e)
+            return False
+
+    def _send_discord_file_bot(
+        self,
+        file_path: str,
+        filename: str,
+        *,
+        content: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
+        """使用 Bot API 以 multipart 形式上传文件附件。"""
+        try:
+            headers = {'Authorization': f'Bot {self._discord_config["bot_token"]}'}
+            url = f'https://discord.com/api/v10/channels/{self._discord_config["channel_id"]}/messages'
+            with open(file_path, 'rb') as fh:
+                files = {'file': (filename, fh)}
+                data = {'content': content} if content else None
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout_seconds or 30,
+                )
+            if response.status_code in [200, 201]:
+                logger.info("Discord Bot 附件发送成功: %s", filename)
+                return True
+            logger.error("Discord Bot 附件发送失败: %s %s", response.status_code, response.text)
+            return False
+        except Exception as e:
+            logger.error("Discord Bot 附件发送异常: %s", e)
+            return False
+
     def _send_discord_webhook(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
         """
         使用 Webhook 发送消息到 Discord
-        
+
         Discord Webhook 支持 Markdown 格式
-        
+
         Args:
             content: Markdown 格式的消息内容
-            
+
         Returns:
             是否发送成功
         """

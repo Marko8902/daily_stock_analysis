@@ -11,6 +11,7 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
+from email.mime.application import MIMEApplication
 from email.header import Header
 from email.utils import formataddr
 import smtplib
@@ -131,55 +132,90 @@ class EmailSender:
             except Exception:
                 pass
     
+    @staticmethod
+    def _prepare_attachments(
+        attachments: Optional[List[str]],
+    ) -> List[tuple]:
+        """过滤出存在的附件文件，返回 [(path, filename), ...]。"""
+        import os
+
+        result: List[tuple] = []
+        for file_path in attachments or []:
+            if file_path and os.path.isfile(file_path):
+                result.append((file_path, os.path.basename(file_path)))
+            else:
+                logger.warning("邮件附件不存在，跳过: %s", file_path)
+        return result
+
+    @staticmethod
+    def _attach_file(msg: MIMEMultipart, file_path: str, filename: str) -> None:
+        """把单个文件作为附件加入邮件。"""
+        try:
+            with open(file_path, 'rb') as fh:
+                part = MIMEApplication(fh.read(), Name=filename)
+            part['Content-Disposition'] = f'attachment; filename="{filename}"'
+            msg.attach(part)
+        except Exception as e:
+            logger.error("添加邮件附件失败 %s: %s", filename, e)
+
     def send_to_email(
         self,
         content: str,
         subject: Optional[str] = None,
         receivers: Optional[List[str]] = None,
         *,
+        attachments: Optional[List[str]] = None,
         timeout_seconds: Optional[float] = None,
     ) -> bool:
         """
         通过 SMTP 发送邮件（自动识别 SMTP 服务器）
-        
+
         Args:
             content: 邮件内容（支持 Markdown，会转换为 HTML）
             subject: 邮件主题（可选，默认自动生成）
             receivers: 收件人列表（可选，默认使用配置的 receivers）
-            
+            attachments: 附件文件路径列表（可选，如报告的 .html / .pdf）
+
         Returns:
             是否发送成功
         """
         if not self._is_email_configured():
             logger.warning("邮件配置不完整，跳过推送")
             return False
-        
+
         sender = self._email_config['sender']
         password = self._email_config['password']
         receivers = receivers or self._email_config['receivers']
         server: Optional[smtplib.SMTP] = None
-        
+
         try:
             # 生成主题
             if subject is None:
                 date_str = datetime.now().strftime('%Y-%m-%d')
                 subject = f"📈 股票智能分析报告 - {date_str}"
-            
+
             # 将 Markdown 转换为简单 HTML
             html_content = markdown_to_html_document(content)
-            
-            # 构建邮件
-            msg = MIMEMultipart('alternative')
+
+            # 文本/HTML 正文部分
+            alt_part = MIMEMultipart('alternative')
+            alt_part.attach(MIMEText(content, 'plain', 'utf-8'))
+            alt_part.attach(MIMEText(html_content, 'html', 'utf-8'))
+
+            # 有附件时使用 mixed 容器，否则直接用 alternative
+            valid_attachments = self._prepare_attachments(attachments)
+            if valid_attachments:
+                msg: MIMEMultipart = MIMEMultipart('mixed')
+                msg.attach(alt_part)
+                for file_path, filename in valid_attachments:
+                    self._attach_file(msg, file_path, filename)
+            else:
+                msg = alt_part
+
             msg['Subject'] = Header(subject, 'utf-8')
             msg['From'] = self._format_sender_address(sender)
             msg['To'] = ', '.join(receivers)
-            
-            # 添加纯文本和 HTML 两个版本
-            text_part = MIMEText(content, 'plain', 'utf-8')
-            html_part = MIMEText(html_content, 'html', 'utf-8')
-            msg.attach(text_part)
-            msg.attach(html_part)
-            
+
             # 自动识别 SMTP 配置
             domain = sender.split('@')[-1].lower()
             smtp_config = SMTP_CONFIGS.get(domain)

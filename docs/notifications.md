@@ -49,6 +49,23 @@
 
 关联板块渲染保持报告正文生成阶段处理：当板块表现数据不可用且所有板块类型均缺失时，只输出一行板块名称；有板块类型或板块涨跌榜信号时继续使用表格。
 
+## 报告导出格式（HTML / PDF）
+
+每日报告除 Markdown 外，可额外导出 HTML 与 PDF 两种格式，统一保存在项目根目录 `reports/`，文件名沿用 `report_YYYYMMDD` 前缀（如 `report_20240102.html` / `report_20240102.pdf`）。
+
+| 环境变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `REPORT_HTML_ENABLED` | `true` | 是否生成 HTML 报告。复用通知/邮件同款内联 CSS 样式，无额外依赖。 |
+| `REPORT_PDF_ENABLED` | `false` | 是否生成 PDF 报告。使用纯 Python 的 `xhtml2pdf`，无需安装 `wkhtmltopdf` 等系统二进制；设为 `true` 开启。 |
+| `REPORT_ATTACH_TO_CHANNELS` | `true` | 是否把生成的 HTML/PDF 作为附件推送到支持文件附件的渠道（当前为 Discord、邮件）。 |
+
+行为与回退说明：
+
+- Markdown 始终生成（保持原有行为）；HTML/PDF 为增量能力，任一格式生成失败只记录日志、不影响其它格式与主流程。
+- PDF 中文使用微软雅黑（`C:\Windows\Fonts\msyh.ttc`），探测顺序为 微软雅黑 → 黑体 simhei → 宋体 simsun → 内置 CID 字体 `STSong-Light`（兜底）。字体或 `xhtml2pdf` 不可用时，`render_pdf` 返回 `None` 并跳过 PDF，不抛异常。
+- 附件推送仅作用于 Discord（webhook/Bot multipart 上传）与邮件（MIME 附件）；其它渠道保持纯文本/图片推送不变。`REPORT_ATTACH_TO_CHANNELS=false` 可仅本地保存、不推送附件。
+- PDF 依赖：`pip install xhtml2pdf`（已写入 `requirements.txt`）。
+
 ## GitHub Actions 映射
 
 仓库自带 `.github/workflows/00-daily-analysis.yml` 只显式导入固定变量名。P0/P3/P4/P6 已把 Body 模板、安全项、PushPlus topic、路由、降噪、ntfy 和 Gotify 等通知 key 纳入默认 workflow。下面的表格由 `scripts/generate_notification_actions_env_table.py` 从 workflow `env:` 和通知诊断元数据生成，避免手写对照表和真实 Actions 映射继续漂移。
