@@ -525,13 +525,27 @@ def run_full_analysis(
 
         # 输出摘要
         if results:
-            logger.info("\n===== 分析结果摘要 =====")
-            for r in sorted(results, key=lambda x: x.sentiment_score, reverse=True):
-                emoji = r.get_emoji()
-                logger.info(
-                    f"{emoji} {r.name}({r.code}): {r.operation_advice} | "
-                    f"评分 {r.sentiment_score} | {r.trend_prediction}"
-                )
+            successful_results = [r for r in results if getattr(r, 'success', True)]
+            failed_results = [r for r in results if not getattr(r, 'success', True)]
+
+            if successful_results:
+                logger.info("\n===== 分析结果摘要 =====")
+                for r in sorted(successful_results, key=lambda x: x.sentiment_score, reverse=True):
+                    emoji = r.get_emoji()
+                    logger.info(
+                        f"{emoji} {r.name}({r.code}): {r.operation_advice} | "
+                        f"评分 {r.sentiment_score} | {r.trend_prediction}"
+                    )
+
+            if failed_results:
+                logger.info("\n===== 分析失败摘要 =====")
+                for r in failed_results:
+                    logger.warning(
+                        "%s(%s): %s",
+                        getattr(r, 'name', r.code),
+                        r.code,
+                        getattr(r, 'error_message', None) or '未知原因',
+                    )
 
         logger.info("\n任务执行完成")
 

@@ -1394,7 +1394,7 @@ class StockAnalysisPipeline:
             )
             fail_count = len(stock_codes) - success_count
         else:
-            success_count = len(results)
+            success_count = sum(1 for result in results if getattr(result, "success", True))
             fail_count = len(stock_codes) - success_count
         
         logger.info("===== 分析完成 =====")

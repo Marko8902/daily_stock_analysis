@@ -293,6 +293,28 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("消息面", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_includes_failed_stock_reason(self, mock_get_config: mock.MagicMock):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="zh")
+        service = NotificationService()
+        result = AnalysisResult(
+            code="605268",
+            name="王力安防",
+            sentiment_score=50,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_summary="分析失败，请稍后重试",
+            success=False,
+            error_message="东方财富接口连接被远端关闭",
+            report_language="zh",
+        )
+
+        out = service.generate_dashboard_report([result], report_date="2026-05-26")
+
+        self.assertIn("605268", out)
+        self.assertIn("分析失败", out)
+        self.assertIn("东方财富接口连接被远端关闭", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_single_stock_report_localizes_english_fallback(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="en")
         service = NotificationService()

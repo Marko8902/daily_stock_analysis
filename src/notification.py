@@ -792,7 +792,11 @@ class NotificationService(
         ma_label = "Moving Averages" if report_language == "en" else "均线"
         volume_analysis_label = "Volume" if report_language == "en" else "量能"
         news_heading = "News Flow" if report_language == "en" else "消息面"
-        if getattr(config, 'report_renderer_enabled', False) and results:
+        if (
+            getattr(config, 'report_renderer_enabled', False)
+            and results
+            and all(getattr(result, 'success', True) for result in results)
+        ):
             from src.services.report_renderer import render
             out = render(
                 platform='markdown',
@@ -814,9 +818,12 @@ class NotificationService(
         sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
 
         # 统计信息 - 使用 decision_type 字段准确统计
-        buy_count = sum(1 for r in results if getattr(r, 'decision_type', '') == 'buy')
-        sell_count = sum(1 for r in results if getattr(r, 'decision_type', '') == 'sell')
-        hold_count = sum(1 for r in results if getattr(r, 'decision_type', '') in ('hold', ''))
+        successful_results = [r for r in results if getattr(r, 'success', True)]
+        failed_results = [r for r in results if not getattr(r, 'success', True)]
+        buy_count = sum(1 for r in successful_results if getattr(r, 'decision_type', '') == 'buy')
+        sell_count = sum(1 for r in successful_results if getattr(r, 'decision_type', '') == 'sell')
+        hold_count = sum(1 for r in successful_results if getattr(r, 'decision_type', '') in ('hold', ''))
+        failed_count = len(failed_results)
 
         report_lines = [
             f"# 🎯 {report_date} {labels['dashboard_title']}",
@@ -1347,7 +1354,8 @@ class NotificationService(
         lines = [
             f"# {report_date} {labels['brief_title']}",
             "",
-            f"> {len(results)} {labels['stock_unit_compact']} | 🟢{buy_count} 🟡{hold_count} 🔴{sell_count}",
+            f"> {len(results)} {labels['stock_unit_compact']} | 🟢{buy_count} 🟡{hold_count} 🔴{sell_count}"
+            + (f" ⚪{failed_count}" if failed_count else ""),
             "",
         ]
         for r in sorted_results:

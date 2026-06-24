@@ -28,6 +28,8 @@ class TestPipelinePrefetchBehavior(unittest.TestCase):
         pipeline.db = MagicMock()
         pipeline.db.has_today_data.return_value = False
         pipeline.process_single_stock = MagicMock(return_value=process_result)
+        pipeline._save_local_report = MagicMock()
+        pipeline._send_notifications = MagicMock()
         pipeline.config = SimpleNamespace(
             stock_list=["000001"],
             refresh_stock_list=lambda: None,
@@ -45,13 +47,31 @@ class TestPipelinePrefetchBehavior(unittest.TestCase):
         pipeline.fetcher_manager.prefetch_stock_names.assert_not_called()
 
     def test_run_non_dry_run_prefetches_stock_names(self):
-        pipeline = self._build_pipeline(process_result=SimpleNamespace(code="000001"))
+        pipeline = self._build_pipeline(
+            process_result=SimpleNamespace(code="000001", success=True)
+        )
 
         pipeline.run(stock_codes=["000001"], dry_run=False, send_notification=False)
 
         pipeline.fetcher_manager.prefetch_stock_names.assert_called_once_with(
             ["000001"], use_bulk=False
         )
+
+    def test_run_keeps_failed_results_in_aggregate_output(self):
+        pipeline = self._build_pipeline(
+            process_result=SimpleNamespace(
+                code="000001",
+                success=False,
+                error_message="network timeout",
+            )
+        )
+
+        results = pipeline.run(stock_codes=["000001"], dry_run=False, send_notification=False)
+
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].success)
+        pipeline._save_local_report.assert_called_once_with(results, unittest.mock.ANY)
+        pipeline._send_notifications.assert_not_called()
 
     def test_run_dry_run_counts_existing_data_by_effective_trading_date(self):
         pipeline = self._build_pipeline(process_result=None)
