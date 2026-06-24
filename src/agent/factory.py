@@ -29,6 +29,8 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
+from src.config import AGENT_MAX_STEPS_DEFAULT
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -55,6 +57,29 @@ class SkillPromptState:
     skill_instructions: str
     default_skill_policy: str
     technical_skill_policy: str
+
+
+def _coerce_config_int(raw_value: object, default: int, *, field_name: str | None = None) -> int:
+    """Coerce optional numeric config values to int with a fallback default.
+
+    This protects test doubles and incomplete config objects from propagating
+    mock-like values (e.g., MagicMock attributes) into strict numeric paths.
+
+    This function is side-effect free: it only returns a parsed int fallback value
+    and intentionally never mutates source config attributes.
+    """
+
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError, OverflowError):
+        if field_name:
+            logger.warning(
+                "[AgentFactory] Invalid value for %s: %r, fallback to default %s",
+                field_name,
+                raw_value,
+                default,
+            )
+        return default
 
 
 def _normalize_skill_ids(
@@ -317,14 +342,26 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
         )
 
     from src.agent.executor import AgentExecutor
+    # Intentionally do not mutate config routing fields here. We only coerce
+    # execution params (max_steps/timeout_seconds) from config values; provider,
+    # model, base URL and channel routes stay unchanged and are consumed by
+    # downstream adapter logic as-is.
     return AgentExecutor(
         tool_registry=registry,
         llm_adapter=llm_adapter,
         skill_instructions=prompt_state.skill_instructions,
         default_skill_policy=prompt_state.default_skill_policy,
         use_legacy_default_prompt=prompt_state.use_legacy_default_prompt,
-        max_steps=getattr(config, "agent_max_steps", 10),
-        timeout_seconds=getattr(config, "agent_orchestrator_timeout_s", 0),
+        max_steps=_coerce_config_int(
+            getattr(config, "agent_max_steps", AGENT_MAX_STEPS_DEFAULT),
+            AGENT_MAX_STEPS_DEFAULT,
+            field_name="agent_max_steps",
+        ),
+        timeout_seconds=_coerce_config_int(
+            getattr(config, "agent_orchestrator_timeout_s", 0),
+            0,
+            field_name="agent_orchestrator_timeout_s",
+        ),
     )
 
 
@@ -344,7 +381,11 @@ def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technic
         llm_adapter=llm_adapter,
         skill_instructions=skill_manager.get_skill_instructions(),
         technical_skill_policy=technical_skill_policy,
-        max_steps=getattr(config, "agent_max_steps", 10),
+        max_steps=_coerce_config_int(
+            getattr(config, "agent_max_steps", AGENT_MAX_STEPS_DEFAULT),
+            AGENT_MAX_STEPS_DEFAULT,
+            field_name="agent_max_steps",
+        ),
         mode=mode,
         skill_manager=skill_manager,
         config=config,
