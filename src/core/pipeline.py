@@ -3029,10 +3029,17 @@ class StockAnalysisPipeline:
         results: List[AnalysisResult],
         report_type: ReportType = ReportType.SIMPLE,
     ) -> None:
-        """保存分析报告到本地文件（与通知推送解耦）"""
+        """保存分析报告到本地文件（与通知推送解耦）
+
+        始终生成 Markdown；HTML 默认生成、PDF 按配置开关生成。
+        生成的文件路径映射缓存到 notifier，供后续附件推送复用。
+        """
         try:
             report = self._generate_aggregate_report(results, report_type)
-            filepath = self.notifier.save_report_to_file(report)
+            report_files = self.notifier.save_report_all_formats(report)
+            # 缓存多格式文件路径，供 _send_notifications 附件推送复用
+            self.notifier._last_report_files = report_files
+            filepath = report_files.get('md') or next(iter(report_files.values()), None)
             logger.info(f"决策仪表盘日报已保存: {filepath}")
         except Exception as e:
             logger.error(f"保存本地报告失败: {e}")
@@ -3503,6 +3510,16 @@ class StockAnalysisPipeline:
                     logger.info("决策仪表盘推送成功")
                 else:
                     logger.warning("决策仪表盘推送失败")
+
+                # 将本地生成的 HTML/PDF 报告作为附件推送到支持文件的渠道（Discord、邮件）。
+                # 复用 _save_local_report 缓存的文件路径，避免重复生成；任何失败都不影响主流程。
+                try:
+                    report_files = getattr(self.notifier, "_last_report_files", None)
+                    if report_files and hasattr(self.notifier, "send_report_attachments"):
+                        self.notifier.send_report_attachments(report_files)
+                except Exception as e:
+                    logger.error(f"报告附件推送失败: {e}")
+
                 if not has_targeted_channels and not send_context:
                     channel_label = ",".join(channel.value for channel in channels) or "report"
                     notification_run = self._build_notification_run_snapshot(
