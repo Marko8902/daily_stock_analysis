@@ -55,7 +55,16 @@ jobs:
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
-      
+
+      - name: 安装中文字体（用于 PDF 报告渲染）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-wqy-zenhei
+          # 刷新字体缓存，确保 report_exporter 能探测到已安装字体
+          sudo fc-cache -f >/dev/null 2>&1 || true
+          echo "已安装中文字体："
+          fc-list | grep -iE "noto sans cjk|wenquanyi" | head -5 || echo "（未匹配到预期字体名，PDF 将回退到内置 CID 字体）"
+
       - name: 执行股票分析
         env:
           # ==========================================
@@ -362,6 +371,10 @@ jobs:
           REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
           REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || '' }}
           REPORT_SHOW_LLM_MODEL: ${{ vars.REPORT_SHOW_LLM_MODEL || secrets.REPORT_SHOW_LLM_MODEL || 'true' }}
+          # 报告导出格式：HTML 默认开启；PDF 默认关闭（需 REPORT_PDF_ENABLED=true）；附件推送默认开启
+          REPORT_HTML_ENABLED: ${{ vars.REPORT_HTML_ENABLED || secrets.REPORT_HTML_ENABLED || 'true' }}
+          REPORT_PDF_ENABLED: ${{ vars.REPORT_PDF_ENABLED || secrets.REPORT_PDF_ENABLED || 'false' }}
+          REPORT_ATTACH_TO_CHANNELS: ${{ vars.REPORT_ATTACH_TO_CHANNELS || secrets.REPORT_ATTACH_TO_CHANNELS || 'true' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
           MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}

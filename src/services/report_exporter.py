@@ -17,7 +17,9 @@ xhtml2pdf 自带的 ``@font-face`` 加载器对 Windows 的 TTC 集合字体
 注入 xhtml2pdf 的 ``pisaContext.fontList``，从而让中文正常渲染并嵌入 PDF。
 
 字体探测优先级（找到第一个可用即停止）：
-	微软雅黑 msyh.ttc -> 黑体 simhei.ttf -> 宋体 simsun.ttc -> 内置 CID STSong-Light
+	Windows: 微软雅黑 msyh.ttc -> 黑体 simhei.ttf -> 宋体 simsun.ttc
+	Linux:   Noto Sans CJK -> 文泉驿正黑/微米黑
+	全部缺失时回退内置 CID STSong-Light
 
 任何一步失败都不会抛出异常，``render_pdf`` 返回 ``None``，调用方应回退（如仅保存
 Markdown/HTML），保证主流程零中断。
@@ -36,11 +38,20 @@ logger = logging.getLogger(__name__)
 PDF_FONT_FAMILY = "msyh"
 
 # 候选字体：(reportlab 字体名, 文件路径, TTC 子字体索引或 None 表示普通 TTF)
+# Windows 字体在前（保持本地行为不变）；Linux 字体在后（GitHub Actions 等云端环境）。
 _FONT_CANDIDATES: List[Tuple[str, str, Optional[int]]] = [
 	("msyh", r"C:\Windows\Fonts\msyh.ttc", 0),       # 微软雅黑（首选）
 	("msyhl", r"C:\Windows\Fonts\msyhl.ttc", 0),     # 微软雅黑 Light
 	("simhei", r"C:\Windows\Fonts\simhei.ttf", None),  # 黑体
 	("simsun", r"C:\Windows\Fonts\simsun.ttc", 0),   # 宋体
+	# --- Linux（fonts-noto-cjk / fonts-wqy-zenhei）---
+	("notosanscjk", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+	("notosanscjksc", "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf", None),
+	("notosanscjk-otf", "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", 0),
+	("wqyzenhei", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 0),
+	("wqymicrohei", "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", 0),
+	# --- macOS（本地开发兜底）---
+	("pingfang", "/System/Library/Fonts/PingFang.ttc", 0),
 ]
 
 # 常见 CJK 字体族别名，统一映射到已注册字体，确保未显式声明字体的文本也用中文字体
