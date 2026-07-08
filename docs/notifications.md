@@ -19,6 +19,7 @@
 | Discord | 静态配置 | `DISCORD_WEBHOOK_URL` 或 `DISCORD_BOT_TOKEN` + `DISCORD_MAIN_CHANNEL_ID` | `DISCORD_INTERACTIONS_PUBLIC_KEY` | Webhook 与 Bot 均可启用发送 |
 | Slack | 静态配置 | `SLACK_WEBHOOK_URL` 或 `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID` | - | Bot 优先用于文本与图片同频道发送 |
 | AstrBot | 静态配置 | `ASTRBOT_URL` | `ASTRBOT_TOKEN`, `WEBHOOK_VERIFY_SSL` | `ASTRBOT_TOKEN` 可选 |
+| Synology Chat | 静态配置 | `SYNOLOGY_CHAT_WEBHOOK_URL` | `WEBHOOK_VERIFY_SSL` | 标准 Incoming Webhook，token 内嵌在 URL 的 query 中；以 `application/x-www-form-urlencoded` 的 `payload` 字段发送文本 |
 | `UNKNOWN` | 兜底枚举 | - | - | 仅为未知渠道兜底，不由静态环境变量启用 |
 | 钉钉会话 | 运行时上下文 | - | - | 从来源消息上下文提取，无法仅由 `.env` 静态判断 |
 | 飞书会话 | 运行时上下文 | - | - | 从来源消息上下文提取，交互式命令结果仅回到来源会话 |
@@ -97,7 +98,7 @@
 | `CUSTOM_WEBHOOK_URLS` | minimal | custom | Secret | - |
 | `CUSTOM_WEBHOOK_BEARER_TOKEN` | advanced | custom | Secret | - |
 | `CUSTOM_WEBHOOK_BODY_TEMPLATE` | advanced | custom | Variable or Secret | - |
-| `WEBHOOK_VERIFY_SSL` | advanced | ntfy, gotify, custom, astrbot | Variable or Secret | `true` |
+| `WEBHOOK_VERIFY_SSL` | advanced | ntfy, gotify, custom, astrbot, synology_chat | Variable or Secret | `true` |
 | `DISCORD_WEBHOOK_URL` | minimal | discord | Secret | - |
 | `DISCORD_BOT_TOKEN` | minimal | discord | Secret | - |
 | `DISCORD_MAIN_CHANNEL_ID` | minimal | discord | Secret | - |
@@ -112,6 +113,7 @@
 | `SLACK_WEBHOOK_URL` | minimal | slack | Secret | - |
 | `SLACK_BOT_TOKEN` | minimal | slack | Secret | - |
 | `SLACK_CHANNEL_ID` | minimal | slack | Secret | - |
+| `SYNOLOGY_CHAT_WEBHOOK_URL` | minimal | synology_chat | Secret | - |
 | `NOTIFICATION_REPORT_CHANNELS` | advanced | routing | Variable or Secret | - |
 | `NOTIFICATION_ALERT_CHANNELS` | advanced | routing | Variable or Secret | - |
 | `NOTIFICATION_SYSTEM_ERROR_CHANNELS` | advanced | routing | Variable or Secret | - |
@@ -203,6 +205,12 @@ GOTIFY_URL=https://example.com/gotify
 GOTIFY_TOKEN=app-token
 ```
 
+Synology Chat 是一等通知渠道，使用 Synology Chat 的标准 Incoming Webhook。在 Synology Chat -> 集成 -> 传入 Webhook 创建后，复制到的完整 URL 里已内嵌 token（通常带引号），请原样粘贴到 `SYNOLOGY_CHAT_WEBHOOK_URL`，系统不会重建 query 或改写 token。发送时以 `application/x-www-form-urlencoded` 提交 `payload` 字段，值为包含 `text` 的 JSON，符合 Synology Chat Incoming Webhook 约定。自建 NAS 常用自签证书，可用 `WEBHOOK_VERIFY_SSL=false` 关闭校验：
+
+```env
+SYNOLOGY_CHAT_WEBHOOK_URL=https://nas.example:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token="xxx"
+```
+
 NapCat / OneBot HTTP API 需要按实际 endpoint 和目标类型调整。下面只是常见 body 形态示例，`user_id`、`group_id`、URL 路径和鉴权方式都应以你的 NapCat 配置为准：
 
 ```env
@@ -225,7 +233,7 @@ P3 新增三类通知路由配置：
 | `alert` | `NOTIFICATION_ALERT_CHANNELS` | EventMonitor 触发通知 |
 | `system_error` | `NOTIFICATION_SYSTEM_ERROR_CHANNELS` | 预留能力；当前不新增自动系统错误生产者 |
 
-配置值为逗号分隔渠道枚举：`wechat,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot`。
+配置值为逗号分隔渠道枚举：`wechat,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot,synology_chat`。
 
 - 留空或未配置：保持旧行为，发送到所有已配置静态渠道。
 - 非空：只发送到路由列表与已配置渠道的交集；交集为空时不会 fallback 到全渠道。

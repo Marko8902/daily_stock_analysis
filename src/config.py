@@ -16,7 +16,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv, dotenv_values
 from dataclasses import dataclass, field
 
@@ -104,6 +104,18 @@ def _has_gotify_base_url(value: Optional[str]) -> bool:
         return False
     path_segments = [segment for segment in parsed.path.split("/") if segment]
     return not (path_segments and path_segments[-1].lower() == "message")
+
+
+def _has_synology_chat_webhook_url(value: Optional[str]) -> bool:
+    """Return whether a Synology Chat incoming webhook URL contains a token."""
+    raw_url = (value or "").strip()
+    if not raw_url:
+        return False
+    parsed = urlparse(raw_url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return False
+    query_params = parse_qs(parsed.query)
+    return any(token.strip().strip('"') for token in query_params.get("token", []))
 
 
 def parse_prompt_cache_diagnostics_level(value: Optional[str]) -> str:
@@ -835,7 +847,10 @@ class Config:
     # Gotify 配置（server base URL；sender 会拼接 /message）
     gotify_url: Optional[str] = None
     gotify_token: Optional[str] = None
-    
+
+    # Synology Chat 配置（标准 Incoming Webhook 完整 URL，token 内嵌在 query 中）
+    synology_chat_webhook_url: Optional[str] = None
+
     # 自定义 Webhook（支持多个，逗号分隔）
     # 适用于：钉钉、Discord、Slack、自建服务等任意支持 POST JSON 的 Webhook
     custom_webhook_urls: List[str] = field(default_factory=list)
@@ -1692,6 +1707,7 @@ class Config:
             ntfy_token=os.getenv('NTFY_TOKEN'),
             gotify_url=os.getenv('GOTIFY_URL'),
             gotify_token=os.getenv('GOTIFY_TOKEN'),
+            synology_chat_webhook_url=os.getenv('SYNOLOGY_CHAT_WEBHOOK_URL'),
             pushplus_token=os.getenv('PUSHPLUS_TOKEN'),
             pushplus_topic=os.getenv('PUSHPLUS_TOPIC'),
             serverchan3_sendkey=os.getenv('SERVERCHAN3_SENDKEY'),
@@ -2797,6 +2813,7 @@ class Config:
             or self.pushplus_token
             or self.serverchan3_sendkey
             or self.custom_webhook_urls
+            or self.synology_chat_webhook_url
             or self.astrbot_url
             or (self.discord_bot_token and self.discord_main_channel_id)
             or self.discord_webhook_url
@@ -2847,6 +2864,7 @@ class Config:
             ("FEISHU_WEBHOOK_URL", self.feishu_webhook_url),
             ("DISCORD_WEBHOOK_URL", self.discord_webhook_url),
             ("SLACK_WEBHOOK_URL", self.slack_webhook_url),
+            ("SYNOLOGY_CHAT_WEBHOOK_URL", self.synology_chat_webhook_url),
             ("ASTRBOT_URL", self.astrbot_url),
         ):
             _warn_if_webhook_url_invalid(field, value)
@@ -2877,6 +2895,18 @@ class Config:
                 severity="warning",
                 message="已配置 GOTIFY_URL，但缺少 GOTIFY_TOKEN，Gotify 渠道不会启用",
                 field="GOTIFY_TOKEN",
+            ))
+
+        if self.synology_chat_webhook_url and not _has_synology_chat_webhook_url(
+            self.synology_chat_webhook_url
+        ):
+            issues.append(ConfigIssue(
+                severity="error",
+                message=(
+                    "SYNOLOGY_CHAT_WEBHOOK_URL 必须是包含 token 的完整 Incoming Webhook URL，"
+                    "例如 https://nas:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=\"xxx\""
+                ),
+                field="SYNOLOGY_CHAT_WEBHOOK_URL",
             ))
 
         if self.notification_quiet_hours:

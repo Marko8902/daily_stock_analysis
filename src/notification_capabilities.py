@@ -172,6 +172,13 @@ CHANNEL_PROFILES: Dict[str, ChannelProfile] = {
         default_mode="plain_fallback",
         supports_link=True,
     ),
+    "synology_chat": ChannelProfile(
+        channel="synology_chat",
+        markdown="markdown",
+        default_mode="full_report",
+        supports_link=True,
+        notes="Synology Chat incoming webhook renders limited markdown; text is sent as a form-encoded payload field.",
+    ),
     "unknown": ChannelProfile(
         channel="unknown",
         markdown="plain_text",

@@ -1,0 +1,536 @@
+diff --git a/.env.example b/.env.example
+index 369c76b..9a69b08 100644
+--- a/.env.example
++++ b/.env.example
+@@ -610,6 +610,12 @@ AGENT_SKILLS=
+ # ASTRBOT_URL=
+ # ASTRBOT_TOKEN=  # 可选，用于需要 Bearer Token 的 AstrBot Webhook
+ #
++# 【方式十二】Synology Chat 配置（群晖 Chat 标准 Incoming Webhook）
++# 在 Synology Chat -> 集成 -> 传入 Webhook 创建后复制完整 URL（token 已内嵌在 URL 中）。
++# 形态为 .../webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token="xxx"
++# 请原样粘贴（含 token 的引号），系统会以 application/x-www-form-urlencoded 的 payload 字段发送文本。
++# SYNOLOGY_CHAT_WEBHOOK_URL=
++#
+ # 【高级配置】消息长度限制（字节）
+ # 超过限制会自动分批发送，一般无需修改
+ # FEISHU_MAX_BYTES=20000    # 飞书限制约 20KB，默认 20000 字节
+@@ -625,7 +631,7 @@ AGENT_SKILLS=
+ #
+ # 【通知路由策略】(Issue #1200 P3)
+ # 默认留空：该类型通知发送到所有已配置渠道。填写后仅发送到列出的已配置渠道。
+-# 允许值：wechat,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot
++# 允许值：wechat,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot,synology_chat
+ # NOTIFICATION_REPORT_CHANNELS=
+ # NOTIFICATION_ALERT_CHANNELS=
+ # NOTIFICATION_SYSTEM_ERROR_CHANNELS=
+diff --git a/.github/workflows/00-daily-analysis.yml b/.github/workflows/00-daily-analysis.yml
+index 9eb1134..706632f 100644
+--- a/.github/workflows/00-daily-analysis.yml
++++ b/.github/workflows/00-daily-analysis.yml
+@@ -347,6 +347,9 @@ jobs:
+           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+ 
++          # 方式十三：Synology Chat（标准 Incoming Webhook，token 内嵌在 URL 中）
++          SYNOLOGY_CHAT_WEBHOOK_URL: ${{ secrets.SYNOLOGY_CHAT_WEBHOOK_URL }}
++
+           # 通知路由策略（留空时保持全部已配置渠道）
+           NOTIFICATION_REPORT_CHANNELS: ${{ vars.NOTIFICATION_REPORT_CHANNELS || secrets.NOTIFICATION_REPORT_CHANNELS }}
+           NOTIFICATION_ALERT_CHANNELS: ${{ vars.NOTIFICATION_ALERT_CHANNELS || secrets.NOTIFICATION_ALERT_CHANNELS }}
+@@ -469,6 +472,7 @@ jobs:
+           echo "  Discord: $([ -n "$DISCORD_WEBHOOK_URL" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+           echo "  AstrBot: $([ -n "$ASTRBOT_URL" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+           echo "  Slack: $(([ -n "$SLACK_WEBHOOK_URL" ] || ([ -n "$SLACK_BOT_TOKEN" ] && [ -n "$SLACK_CHANNEL_ID" ])) && echo '✅ 已配置' || echo '⚪ 未配置')"
++          echo "  Synology Chat: $([ -n "$SYNOLOGY_CHAT_WEBHOOK_URL" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+           echo "=========================================="
+           echo ""
+           
+diff --git a/.gitignore b/.gitignore
+index 19c70b6..e1ce9d9 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -87,3 +87,8 @@ static/
+ /apps/dsa-desktop/dist/
+ /apps/dsa-desktop/node_modules/
+ docs/specs/
++
++# IDE / 编辑器本地缓存
++.vs/
++.idea/
++*.user
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+index 083d427..cd328fa 100644
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
+ <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
+ <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+ 
++- [新功能] 新增 Synology Chat 通知渠道（标准 Incoming Webhook，`SYNOLOGY_CHAT_WEBHOOK_URL`），支持本地、Docker 与 GitHub Actions env 映射。
++
+ - [修复] 修复日股/韩股历史列表重建市场阶段摘要时将 non_trading 等结果阶段误传为 analysis_phase 导致列表查询失败的问题。
+ - [新功能] 支持 SCHEDULE_TIMES 多时间定时推送，并让 Web/API/Desktop 长运行进程保存调度配置后热启停或重建 runtime scheduler。
+ - [改进] Web 设置页以“定时任务”面板维护多时间定时推送、状态刷新和立即执行一次，不再向用户直接暴露 SCHEDULE_TIMES 等内部配置键。
+diff --git a/docs/notifications.md b/docs/notifications.md
+index 2702383..dedc1bb 100644
+--- a/docs/notifications.md
++++ b/docs/notifications.md
+@@ -19,6 +19,7 @@
+ | Discord | 静态配置 | `DISCORD_WEBHOOK_URL` 或 `DISCORD_BOT_TOKEN` + `DISCORD_MAIN_CHANNEL_ID` | `DISCORD_INTERACTIONS_PUBLIC_KEY` | Webhook 与 Bot 均可启用发送 |
+ | Slack | 静态配置 | `SLACK_WEBHOOK_URL` 或 `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID` | - | Bot 优先用于文本与图片同频道发送 |
+ | AstrBot | 静态配置 | `ASTRBOT_URL` | `ASTRBOT_TOKEN`, `WEBHOOK_VERIFY_SSL` | `ASTRBOT_TOKEN` 可选 |
++| Synology Chat | 静态配置 | `SYNOLOGY_CHAT_WEBHOOK_URL` | `WEBHOOK_VERIFY_SSL` | 标准 Incoming Webhook，token 内嵌在 URL 的 query 中；以 `application/x-www-form-urlencoded` 的 `payload` 字段发送文本 |
+ | `UNKNOWN` | 兜底枚举 | - | - | 仅为未知渠道兜底，不由静态环境变量启用 |
+ | 钉钉会话 | 运行时上下文 | - | - | 从来源消息上下文提取，无法仅由 `.env` 静态判断 |
+ | 飞书会话 | 运行时上下文 | - | - | 从来源消息上下文提取，交互式命令结果仅回到来源会话 |
+@@ -97,7 +98,7 @@
+ | `CUSTOM_WEBHOOK_URLS` | minimal | custom | Secret | - |
+ | `CUSTOM_WEBHOOK_BEARER_TOKEN` | advanced | custom | Secret | - |
+ | `CUSTOM_WEBHOOK_BODY_TEMPLATE` | advanced | custom | Variable or Secret | - |
+-| `WEBHOOK_VERIFY_SSL` | advanced | ntfy, gotify, custom, astrbot | Variable or Secret | `true` |
++| `WEBHOOK_VERIFY_SSL` | advanced | ntfy, gotify, custom, astrbot, synology_chat | Variable or Secret | `true` |
+ | `DISCORD_WEBHOOK_URL` | minimal | discord | Secret | - |
+ | `DISCORD_BOT_TOKEN` | minimal | discord | Secret | - |
+ | `DISCORD_MAIN_CHANNEL_ID` | minimal | discord | Secret | - |
+@@ -112,6 +113,7 @@
+ | `SLACK_WEBHOOK_URL` | minimal | slack | Secret | - |
+ | `SLACK_BOT_TOKEN` | minimal | slack | Secret | - |
+ | `SLACK_CHANNEL_ID` | minimal | slack | Secret | - |
++| `SYNOLOGY_CHAT_WEBHOOK_URL` | minimal | synology_chat | Secret | - |
+ | `NOTIFICATION_REPORT_CHANNELS` | advanced | routing | Variable or Secret | - |
+ | `NOTIFICATION_ALERT_CHANNELS` | advanced | routing | Variable or Secret | - |
+ | `NOTIFICATION_SYSTEM_ERROR_CHANNELS` | advanced | routing | Variable or Secret | - |
+@@ -203,6 +205,12 @@ GOTIFY_URL=https://example.com/gotify
+ GOTIFY_TOKEN=app-token
+ ```
+ 
++Synology Chat 是一等通知渠道，使用 Synology Chat 的标准 Incoming Webhook。在 Synology Chat -> 集成 -> 传入 Webhook 创建后，复制到的完整 URL 里已内嵌 token（通常带引号），请原样粘贴到 `SYNOLOGY_CHAT_WEBHOOK_URL`，系统不会重建 query 或改写 token。发送时以 `application/x-www-form-urlencoded` 提交 `payload` 字段，值为包含 `text` 的 JSON，符合 Synology Chat Incoming Webhook 约定。自建 NAS 常用自签证书，可用 `WEBHOOK_VERIFY_SSL=false` 关闭校验：
++
++```env
++SYNOLOGY_CHAT_WEBHOOK_URL=https://nas.example:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token="xxx"
++```
++
+ NapCat / OneBot HTTP API 需要按实际 endpoint 和目标类型调整。下面只是常见 body 形态示例，`user_id`、`group_id`、URL 路径和鉴权方式都应以你的 NapCat 配置为准：
+ 
+ ```env
+@@ -225,7 +233,7 @@ P3 新增三类通知路由配置：
+ | `alert` | `NOTIFICATION_ALERT_CHANNELS` | EventMonitor 触发通知 |
+ | `system_error` | `NOTIFICATION_SYSTEM_ERROR_CHANNELS` | 预留能力；当前不新增自动系统错误生产者 |
+ 
+-配置值为逗号分隔渠道枚举：`wechat,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot`。
++配置值为逗号分隔渠道枚举：`wechat,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot,synology_chat`。
+ 
+ - 留空或未配置：保持旧行为，发送到所有已配置静态渠道。
+ - 非空：只发送到路由列表与已配置渠道的交集；交集为空时不会 fallback 到全渠道。
+diff --git a/src/config.py b/src/config.py
+index 1fdb5fc..736e5b1 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -16,7 +16,7 @@ import os
+ import re
+ from pathlib import Path
+ from typing import Any, Dict, List, Literal, Optional, Tuple
+-from urllib.parse import unquote, urlparse
++from urllib.parse import parse_qs, unquote, urlparse
+ from dotenv import load_dotenv, dotenv_values
+ from dataclasses import dataclass, field
+ 
+@@ -106,6 +106,18 @@ def _has_gotify_base_url(value: Optional[str]) -> bool:
+     return not (path_segments and path_segments[-1].lower() == "message")
+ 
+ 
++def _has_synology_chat_webhook_url(value: Optional[str]) -> bool:
++    """Return whether a Synology Chat incoming webhook URL contains a token."""
++    raw_url = (value or "").strip()
++    if not raw_url:
++        return False
++    parsed = urlparse(raw_url)
++    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
++        return False
++    query_params = parse_qs(parsed.query)
++    return any(token.strip().strip('"') for token in query_params.get("token", []))
++
++
+ def parse_prompt_cache_diagnostics_level(value: Optional[str]) -> str:
+     """Parse prompt-cache diagnostics level with a conservative fallback."""
+     normalized = (value or "off").strip().lower()
+@@ -836,6 +848,9 @@ class Config:
+     gotify_url: Optional[str] = None
+     gotify_token: Optional[str] = None
+ 
++    # Synology Chat 配置（标准 Incoming Webhook 完整 URL，token 内嵌在 query 中）
++    synology_chat_webhook_url: Optional[str] = None
++
+     # 自定义 Webhook（支持多个，逗号分隔）
+     # 适用于：钉钉、Discord、Slack、自建服务等任意支持 POST JSON 的 Webhook
+     custom_webhook_urls: List[str] = field(default_factory=list)
+@@ -1692,6 +1707,7 @@ class Config:
+             ntfy_token=os.getenv('NTFY_TOKEN'),
+             gotify_url=os.getenv('GOTIFY_URL'),
+             gotify_token=os.getenv('GOTIFY_TOKEN'),
++            synology_chat_webhook_url=os.getenv('SYNOLOGY_CHAT_WEBHOOK_URL'),
+             pushplus_token=os.getenv('PUSHPLUS_TOKEN'),
+             pushplus_topic=os.getenv('PUSHPLUS_TOPIC'),
+             serverchan3_sendkey=os.getenv('SERVERCHAN3_SENDKEY'),
+@@ -2797,6 +2813,7 @@ class Config:
+             or self.pushplus_token
+             or self.serverchan3_sendkey
+             or self.custom_webhook_urls
++            or self.synology_chat_webhook_url
+             or self.astrbot_url
+             or (self.discord_bot_token and self.discord_main_channel_id)
+             or self.discord_webhook_url
+@@ -2847,6 +2864,7 @@ class Config:
+             ("FEISHU_WEBHOOK_URL", self.feishu_webhook_url),
+             ("DISCORD_WEBHOOK_URL", self.discord_webhook_url),
+             ("SLACK_WEBHOOK_URL", self.slack_webhook_url),
++            ("SYNOLOGY_CHAT_WEBHOOK_URL", self.synology_chat_webhook_url),
+             ("ASTRBOT_URL", self.astrbot_url),
+         ):
+             _warn_if_webhook_url_invalid(field, value)
+@@ -2879,6 +2897,18 @@ class Config:
+                 field="GOTIFY_TOKEN",
+             ))
+ 
++        if self.synology_chat_webhook_url and not _has_synology_chat_webhook_url(
++            self.synology_chat_webhook_url
++        ):
++            issues.append(ConfigIssue(
++                severity="error",
++                message=(
++                    "SYNOLOGY_CHAT_WEBHOOK_URL 必须是包含 token 的完整 Incoming Webhook URL，"
++                    "例如 https://nas:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=\"xxx\""
++                ),
++                field="SYNOLOGY_CHAT_WEBHOOK_URL",
++            ))
++
+         if self.notification_quiet_hours:
+             try:
+                 parse_notification_quiet_hours(self.notification_quiet_hours)
+diff --git a/src/core/pipeline.py b/src/core/pipeline.py
+index b898616..a12b8ea 100644
+--- a/src/core/pipeline.py
++++ b/src/core/pipeline.py
+@@ -3188,7 +3188,11 @@ class StockAnalysisPipeline:
+                 channels_needing_image = {
+                     ch for ch in channels
+                     if ch.value in self.notifier._markdown_to_image_channels
+-                    and ch not in {NotificationChannel.NTFY, NotificationChannel.GOTIFY}
++                    and ch not in {
++                        NotificationChannel.NTFY,
++                        NotificationChannel.GOTIFY,
++                        NotificationChannel.SYNOLOGY_CHAT,
++                    }
+                 }
+                 non_wechat_channels_needing_image = {
+                     ch for ch in channels_needing_image if ch != NotificationChannel.WECHAT
+@@ -3467,6 +3471,17 @@ class StockAnalysisPipeline:
+                             channel_success,
+                             channel_error,
+                         )
++                    elif channel == NotificationChannel.SYNOLOGY_CHAT:
++                        channel_success, channel_error = _send_channel_safely(
++                            channel.value,
++                            lambda: self.notifier.send_to_synology_chat(report),
++                        )
++                        non_wechat_success = channel_success or non_wechat_success
++                        _record_channel_result(
++                            channel.value,
++                            channel_success,
++                            channel_error,
++                        )
+                     elif channel == NotificationChannel.SLACK:
+                         def _send_slack_report() -> bool:
+                             use_image = self.notifier._should_use_image_for_channel(
+diff --git a/src/notification.py b/src/notification.py
+index a7339ad..558d4c4 100644
+--- a/src/notification.py
++++ b/src/notification.py
+@@ -65,11 +65,13 @@ from src.notification_sender import (
+     PushplusSender,
+     Serverchan3Sender,
+     SlackSender,
++    SynologyChatSender,
+     TelegramSender,
+     WechatSender,
+     WECHAT_IMAGE_MAX_BYTES,
+     resolve_gotify_message_endpoint,
+     resolve_ntfy_endpoint,
++    resolve_synology_chat_webhook_url,
+ )
+ 
+ logger = logging.getLogger(__name__)
+@@ -113,6 +115,7 @@ class NotificationChannel(Enum):
+     DISCORD = "discord"    # Discord 机器人 (Bot)
+     SLACK = "slack"        # Slack
+     ASTRBOT = "astrbot"
++    SYNOLOGY_CHAT = "synology_chat"  # Synology Chat Incoming Webhook
+     UNKNOWN = "unknown"    # 未知
+ 
+ 
+@@ -163,6 +166,7 @@ class ChannelDetector:
+             NotificationChannel.DISCORD: "Discord机器人",
+             NotificationChannel.SLACK: "Slack",
+             NotificationChannel.ASTRBOT: "ASTRBOT机器人",
++            NotificationChannel.SYNOLOGY_CHAT: "Synology Chat",
+             NotificationChannel.UNKNOWN: "未知渠道",
+         }
+         return names.get(channel, "未知渠道")
+@@ -180,6 +184,7 @@ class NotificationService(
+     PushplusSender,
+     Serverchan3Sender,
+     SlackSender,
++    SynologyChatSender,
+     TelegramSender,
+     WechatSender
+ ):
+@@ -237,6 +242,7 @@ class NotificationService(
+         PushplusSender.__init__(self, config)
+         Serverchan3Sender.__init__(self, config)
+         SlackSender.__init__(self, config)
++        SynologyChatSender.__init__(self, config)
+         TelegramSender.__init__(self, config)
+         WechatSender.__init__(self, config)
+ 
+@@ -449,6 +455,9 @@ class NotificationService(
+         if getattr(config, "astrbot_url", None):
+             channels.append(NotificationChannel.ASTRBOT)
+ 
++        if resolve_synology_chat_webhook_url(getattr(config, "synology_chat_webhook_url", None)):
++            channels.append(NotificationChannel.SYNOLOGY_CHAT)
++
+         return channels
+ 
+     def _detect_all_channels(self) -> List[NotificationChannel]:
+@@ -2188,6 +2197,8 @@ class NotificationService(
+             return self.send_to_slack(content)
+         if channel == NotificationChannel.ASTRBOT:
+             return self.send_to_astrbot(content)
++        if channel == NotificationChannel.SYNOLOGY_CHAT:
++            return self.send_to_synology_chat(content)
+         logger.warning(f"不支持的通知渠道: {channel}")
+         return False
+ 
+@@ -2310,7 +2321,11 @@ class NotificationService(
+         channels_needing_image = {
+             ch for ch in target_channels
+             if ch.value in self._markdown_to_image_channels
+-            and ch not in {NotificationChannel.NTFY, NotificationChannel.GOTIFY}
++            and ch not in {
++                NotificationChannel.NTFY,
++                NotificationChannel.GOTIFY,
++                NotificationChannel.SYNOLOGY_CHAT,
++            }
+         }
+         if channels_needing_image:
+             from src.md2img import markdown_to_image
+diff --git a/src/notification_capabilities.py b/src/notification_capabilities.py
+index 363e13b..8f9eee4 100644
+--- a/src/notification_capabilities.py
++++ b/src/notification_capabilities.py
+@@ -172,6 +172,13 @@ CHANNEL_PROFILES: Dict[str, ChannelProfile] = {
+         default_mode="plain_fallback",
+         supports_link=True,
+     ),
++    "synology_chat": ChannelProfile(
++        channel="synology_chat",
++        markdown="markdown",
++        default_mode="full_report",
++        supports_link=True,
++        notes="Synology Chat incoming webhook renders limited markdown; text is sent as a form-encoded payload field.",
++    ),
+     "unknown": ChannelProfile(
+         channel="unknown",
+         markdown="plain_text",
+diff --git a/src/notification_routing.py b/src/notification_routing.py
+index f5098cf..af4d1b3 100644
+--- a/src/notification_routing.py
++++ b/src/notification_routing.py
+@@ -24,6 +24,7 @@ ROUTABLE_NOTIFICATION_CHANNELS: Tuple[str, ...] = (
+     "discord",
+     "slack",
+     "astrbot",
++    "synology_chat",
+ )
+ ROUTABLE_NOTIFICATION_CHANNEL_SET = frozenset(ROUTABLE_NOTIFICATION_CHANNELS)
+ 
+diff --git a/src/notification_sender/__init__.py b/src/notification_sender/__init__.py
+index b4e4135..9c0255b 100644
+--- a/src/notification_sender/__init__.py
++++ b/src/notification_sender/__init__.py
+@@ -18,5 +18,6 @@ from .pushover_sender import PushoverSender
+ from .pushplus_sender import PushplusSender
+ from .serverchan3_sender import Serverchan3Sender
+ from .slack_sender import SlackSender
++from .synology_chat_sender import SynologyChatSender, resolve_synology_chat_webhook_url
+ from .telegram_sender import TelegramSender
+ from .wechat_sender import WechatSender, WECHAT_IMAGE_MAX_BYTES
+diff --git a/src/notification_sender/synology_chat_sender.py b/src/notification_sender/synology_chat_sender.py
+new file mode 100644
+index 0000000..cb70ec4
+--- /dev/null
++++ b/src/notification_sender/synology_chat_sender.py
+@@ -0,0 +1,109 @@
++# -*- coding: utf-8 -*-
++"""Synology Chat notification sender."""
++
++from __future__ import annotations
++
++import json
++import logging
++from typing import Optional
++from urllib.parse import parse_qs, urlparse
++
++import requests
++
++from src.config import Config
++
++
++logger = logging.getLogger(__name__)
++
++
++def resolve_synology_chat_webhook_url(webhook_url: Optional[str]) -> Optional[str]:
++	"""Validate a Synology Chat incoming webhook URL and return it verbatim.
++
++	Synology Chat 的标准 Incoming Webhook 形态为::
++
++		.../webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token="xxx"
++
++	token 由 Synology 生成并通常带引号，必须原样保留（不重建 query），
++	否则鉴权会失败。这里只做基础校验：必须是 http(s) URL 且 query 中含 token。
++	"""
++	raw_url = (webhook_url or "").strip()
++	if not raw_url:
++		return None
++
++	parsed = urlparse(raw_url)
++	if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
++		return None
++
++	query_params = parse_qs(parsed.query)
++	if not any(token.strip().strip('"') for token in query_params.get("token", [])):
++		return None
++
++	return raw_url
++
++
++class SynologyChatSender:
++	"""Send text notifications through a Synology Chat incoming webhook."""
++
++	def __init__(self, config: Config):
++		self._synology_chat_webhook_url = getattr(config, "synology_chat_webhook_url", None)
++		self._webhook_verify_ssl = getattr(config, "webhook_verify_ssl", True)
++
++	def _is_synology_chat_configured(self) -> bool:
++		return resolve_synology_chat_webhook_url(self._synology_chat_webhook_url) is not None
++
++	def send_to_synology_chat(
++		self,
++		content: str,
++		title: Optional[str] = None,
++		*,
++		timeout_seconds: Optional[float] = None,
++	) -> bool:
++		"""Publish a notification to Synology Chat as a form-encoded ``payload``."""
++		endpoint = resolve_synology_chat_webhook_url(self._synology_chat_webhook_url)
++		if not endpoint:
++			logger.warning("Synology Chat 配置不完整或 Webhook URL 无效，跳过推送")
++			return False
++
++		text = content
++		if title:
++			text = f"**{title}**\n\n{content}"
++
++		# Synology Chat 标准 Incoming Webhook 要求 application/x-www-form-urlencoded，
++		# body 为 payload=<URL 编码后的 JSON>，JSON 至少包含 text 字段。
++		payload = json.dumps({"text": text}, ensure_ascii=False)
++		headers = {"User-Agent": "daily_stock_analysis"}
++
++		try:
++			response = requests.post(
++				endpoint,
++				data={"payload": payload},
++				headers=headers,
++				timeout=timeout_seconds or 10,
++				verify=self._webhook_verify_ssl,
++			)
++			if 200 <= response.status_code < 300:
++				# Synology 在 HTTP 200 下仍可能返回 success=false（如 token 无效）。
++				try:
++					body = response.json()
++				except ValueError:
++					body = None
++				if isinstance(body, dict) and body.get("success") is False:
++					logger.error("Synology Chat 请求被拒绝: %s", body.get("error"))
++					return False
++				logger.info("Synology Chat 消息发送成功")
++				return True
++
++			logger.error("Synology Chat 请求失败: HTTP %s", response.status_code)
++			logger.debug("Synology Chat 响应内容: %s", response.text)
++			return False
++		except requests.exceptions.Timeout:
++			logger.error("发送 Synology Chat 消息失败: 请求超时")
++			return False
++		except requests.exceptions.RequestException as exc:
++			logger.error("发送 Synology Chat 消息失败: 网络请求异常")
++			logger.debug("Synology Chat 请求异常类型: %s", type(exc).__name__)
++			return False
++		except Exception as exc:
++			logger.error("发送 Synology Chat 消息失败: 未知异常")
++			logger.debug("Synology Chat 未知异常类型: %s", type(exc).__name__)
++			return False
+diff --git a/src/services/notification_diagnostics.py b/src/services/notification_diagnostics.py
+index 772b398..c3aac24 100644
+--- a/src/services/notification_diagnostics.py
++++ b/src/services/notification_diagnostics.py
+@@ -23,6 +23,7 @@ from src.notification_routing import (
+ )
+ from src.notification_sender.gotify_sender import resolve_gotify_message_endpoint
+ from src.notification_sender.ntfy_sender import resolve_ntfy_endpoint
++from src.notification_sender.synology_chat_sender import resolve_synology_chat_webhook_url
+ 
+ KeyTier = Literal["minimal", "advanced"]
+ IssueSeverity = Literal["error", "warning", "info"]
+@@ -172,6 +173,14 @@ CHANNEL_SPECS: Tuple[NotificationChannelSpec, ...] = (
+         minimal_keys=("ASTRBOT_URL",),
+         advanced_keys=("ASTRBOT_TOKEN", "WEBHOOK_VERIFY_SSL"),
+     ),
++    NotificationChannelSpec(
++        channel=NotificationChannel.SYNOLOGY_CHAT.value,
++        display_name=ChannelDetector.get_channel_name(NotificationChannel.SYNOLOGY_CHAT),
++        kind="configured",
++        minimal_keys=("SYNOLOGY_CHAT_WEBHOOK_URL",),
++        advanced_keys=("WEBHOOK_VERIFY_SSL",),
++        note="SYNOLOGY_CHAT_WEBHOOK_URL is the standard incoming webhook URL with the token embedded in the query.",
++    ),
+     NotificationChannelSpec(
+         channel=NotificationChannel.UNKNOWN.value,
+         display_name=ChannelDetector.get_channel_name(NotificationChannel.UNKNOWN),
+@@ -243,6 +252,7 @@ P6_CHANNEL_ACTIONS_ENV_KEYS: Tuple[str, ...] = (
+     "NTFY_TOKEN",
+     "GOTIFY_URL",
+     "GOTIFY_TOKEN",
++    "SYNOLOGY_CHAT_WEBHOOK_URL",
+ )
+ 
+ 
+@@ -355,6 +365,17 @@ def run_notification_diagnostics(config: Config) -> NotificationDiagnosticResult
+                 )
+             )
+ 
++    if _has(config, "synology_chat_webhook_url"):
++        if resolve_synology_chat_webhook_url(getattr(config, "synology_chat_webhook_url", None)) is None:
++            errors.append(
++                _issue(
++                    "error",
++                    "invalid_synology_chat_webhook_url",
++                    "SYNOLOGY_CHAT_WEBHOOK_URL 必须是包含 token 的完整 Incoming Webhook URL，例如 https://nas:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=\"xxx\"。",
++                    key="SYNOLOGY_CHAT_WEBHOOK_URL",
++                )
++            )
++
+     _require_pair(
+         config,
+         left_attr="telegram_bot_token",

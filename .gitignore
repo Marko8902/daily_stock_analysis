@@ -87,3 +87,8 @@ static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
 docs/specs/
+
+# IDE / 编辑器本地缓存
+.vs/
+.idea/
+*.user

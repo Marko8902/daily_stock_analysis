@@ -23,6 +23,7 @@ from src.notification_routing import (
 )
 from src.notification_sender.gotify_sender import resolve_gotify_message_endpoint
 from src.notification_sender.ntfy_sender import resolve_ntfy_endpoint
+from src.notification_sender.synology_chat_sender import resolve_synology_chat_webhook_url
 
 KeyTier = Literal["minimal", "advanced"]
 IssueSeverity = Literal["error", "warning", "info"]
@@ -173,6 +174,14 @@ CHANNEL_SPECS: Tuple[NotificationChannelSpec, ...] = (
         advanced_keys=("ASTRBOT_TOKEN", "WEBHOOK_VERIFY_SSL"),
     ),
     NotificationChannelSpec(
+        channel=NotificationChannel.SYNOLOGY_CHAT.value,
+        display_name=ChannelDetector.get_channel_name(NotificationChannel.SYNOLOGY_CHAT),
+        kind="configured",
+        minimal_keys=("SYNOLOGY_CHAT_WEBHOOK_URL",),
+        advanced_keys=("WEBHOOK_VERIFY_SSL",),
+        note="SYNOLOGY_CHAT_WEBHOOK_URL is the standard incoming webhook URL with the token embedded in the query.",
+    ),
+    NotificationChannelSpec(
         channel=NotificationChannel.UNKNOWN.value,
         display_name=ChannelDetector.get_channel_name(NotificationChannel.UNKNOWN),
         kind="fallback",
@@ -243,6 +252,7 @@ P6_CHANNEL_ACTIONS_ENV_KEYS: Tuple[str, ...] = (
     "NTFY_TOKEN",
     "GOTIFY_URL",
     "GOTIFY_TOKEN",
+    "SYNOLOGY_CHAT_WEBHOOK_URL",
 )
 
 
@@ -352,6 +362,17 @@ def run_notification_diagnostics(config: Config) -> NotificationDiagnosticResult
                     "invalid_gotify_url",
                     "GOTIFY_URL 必须是 Gotify server base URL，不包含 /message，例如 https://gotify.example。",
                     key="GOTIFY_URL",
+                )
+            )
+
+    if _has(config, "synology_chat_webhook_url"):
+        if resolve_synology_chat_webhook_url(getattr(config, "synology_chat_webhook_url", None)) is None:
+            errors.append(
+                _issue(
+                    "error",
+                    "invalid_synology_chat_webhook_url",
+                    "SYNOLOGY_CHAT_WEBHOOK_URL 必须是包含 token 的完整 Incoming Webhook URL，例如 https://nas:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=\"xxx\"。",
+                    key="SYNOLOGY_CHAT_WEBHOOK_URL",
                 )
             )
 

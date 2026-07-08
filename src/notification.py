@@ -65,11 +65,13 @@ from src.notification_sender import (
     PushplusSender,
     Serverchan3Sender,
     SlackSender,
+    SynologyChatSender,
     TelegramSender,
     WechatSender,
     WECHAT_IMAGE_MAX_BYTES,
     resolve_gotify_message_endpoint,
     resolve_ntfy_endpoint,
+    resolve_synology_chat_webhook_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,7 @@ class NotificationChannel(Enum):
     DISCORD = "discord"    # Discord 机器人 (Bot)
     SLACK = "slack"        # Slack
     ASTRBOT = "astrbot"
+    SYNOLOGY_CHAT = "synology_chat"  # Synology Chat Incoming Webhook
     UNKNOWN = "unknown"    # 未知
 
 
@@ -163,6 +166,7 @@ class ChannelDetector:
             NotificationChannel.DISCORD: "Discord机器人",
             NotificationChannel.SLACK: "Slack",
             NotificationChannel.ASTRBOT: "ASTRBOT机器人",
+            NotificationChannel.SYNOLOGY_CHAT: "Synology Chat",
             NotificationChannel.UNKNOWN: "未知渠道",
         }
         return names.get(channel, "未知渠道")
@@ -180,6 +184,7 @@ class NotificationService(
     PushplusSender,
     Serverchan3Sender,
     SlackSender,
+    SynologyChatSender,
     TelegramSender,
     WechatSender
 ):
@@ -237,6 +242,7 @@ class NotificationService(
         PushplusSender.__init__(self, config)
         Serverchan3Sender.__init__(self, config)
         SlackSender.__init__(self, config)
+        SynologyChatSender.__init__(self, config)
         TelegramSender.__init__(self, config)
         WechatSender.__init__(self, config)
 
@@ -448,6 +454,9 @@ class NotificationService(
 
         if getattr(config, "astrbot_url", None):
             channels.append(NotificationChannel.ASTRBOT)
+
+        if resolve_synology_chat_webhook_url(getattr(config, "synology_chat_webhook_url", None)):
+            channels.append(NotificationChannel.SYNOLOGY_CHAT)
 
         return channels
 
@@ -2188,6 +2197,8 @@ class NotificationService(
             return self.send_to_slack(content)
         if channel == NotificationChannel.ASTRBOT:
             return self.send_to_astrbot(content)
+        if channel == NotificationChannel.SYNOLOGY_CHAT:
+            return self.send_to_synology_chat(content)
         logger.warning(f"不支持的通知渠道: {channel}")
         return False
 
@@ -2310,7 +2321,11 @@ class NotificationService(
         channels_needing_image = {
             ch for ch in target_channels
             if ch.value in self._markdown_to_image_channels
-            and ch not in {NotificationChannel.NTFY, NotificationChannel.GOTIFY}
+            and ch not in {
+                NotificationChannel.NTFY,
+                NotificationChannel.GOTIFY,
+                NotificationChannel.SYNOLOGY_CHAT,
+            }
         }
         if channels_needing_image:
             from src.md2img import markdown_to_image
