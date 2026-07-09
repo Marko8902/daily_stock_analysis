@@ -35,6 +35,7 @@ from src.notification_sender import (
     PushplusSender,
     Serverchan3Sender,
     SlackSender,
+    SynologyChatSender,
     TelegramSender,
     WechatSender,
     WECHAT_IMAGE_MAX_BYTES,
@@ -589,6 +590,89 @@ class TestFeishuSender(unittest.TestCase):
         self.assertFalse(result)
         create.assert_not_called()
         mock_sleep.assert_not_called()
+
+
+class TestSynologyChatSender(unittest.TestCase):
+    """Unit tests for SynologyChatSender."""
+
+    WEBHOOK = (
+        "https://ds.example.com/webapi/entry.cgi?api=SYNO.Chat.External"
+        "&method=incoming&version=2&token=%22abc%22"
+    )
+
+    def test_send_returns_false_when_no_webhook_url(self):
+        cfg = _config()
+        sender = SynologyChatSender(cfg)
+        result = sender.send_to_synology_chat("hello")
+        self.assertFalse(result)
+
+    @mock.patch("src.notification_sender.synology_chat_sender.requests.post")
+    def test_short_message_sends_single_payload(self, mock_post):
+        mock_post.return_value = _response(200, {"success": True})
+        cfg = _config(synology_chat_webhook_url=self.WEBHOOK)
+        sender = SynologyChatSender(cfg)
+
+        result = sender.send_to_synology_chat("hello", title="标题")
+
+        self.assertTrue(result)
+        mock_post.assert_called_once()
+        payload = json.loads(mock_post.call_args.kwargs["data"]["payload"])
+        self.assertIn("**标题**", payload["text"])
+        self.assertNotIn("📄", payload["text"])
+
+    @mock.patch("src.notification_sender.synology_chat_sender.requests.post")
+    def test_long_message_is_split_into_multiple_payloads(self, mock_post):
+        mock_post.return_value = _response(200, {"success": True})
+        cfg = _config(synology_chat_webhook_url=self.WEBHOOK, synology_chat_max_bytes=200)
+        sender = SynologyChatSender(cfg)
+        content = "\n\n".join(f"## 第{i}节\n中文分析内容用于验证分片。" for i in range(20))
+
+        result = sender.send_to_synology_chat(content)
+
+        self.assertTrue(result)
+        self.assertGreater(mock_post.call_count, 1)
+        for call in mock_post.call_args_list:
+            payload = json.loads(call.kwargs["data"]["payload"])
+            self.assertLessEqual(len(payload["text"].encode("utf-8")), 200)
+            self.assertIn("📄", payload["text"])
+
+    @mock.patch("src.notification_sender.synology_chat_sender.requests.post")
+    def test_msg_too_long_response_returns_false(self, mock_post):
+        mock_post.return_value = _response(
+            200, {"success": False, "error": {"code": 410, "errors": "msg too long"}}
+        )
+        cfg = _config(synology_chat_webhook_url=self.WEBHOOK)
+        sender = SynologyChatSender(cfg)
+
+        result = sender.send_to_synology_chat("hello")
+
+        self.assertFalse(result)
+
+    @mock.patch("src.notification_sender.synology_chat_sender.requests.post")
+    def test_split_send_stops_on_first_failure(self, mock_post):
+        mock_post.side_effect = [
+            _response(200, {"success": True}),
+            _response(200, {"success": False, "error": {"code": 410, "errors": "msg too long"}}),
+            _response(200, {"success": True}),
+        ]
+        cfg = _config(synology_chat_webhook_url=self.WEBHOOK, synology_chat_max_bytes=200)
+        sender = SynologyChatSender(cfg)
+        content = "\n\n".join(f"## 第{i}节\n中文分析内容用于验证分片。" for i in range(20))
+
+        result = sender.send_to_synology_chat(content)
+
+        self.assertFalse(result)
+        self.assertEqual(mock_post.call_count, 2)
+
+    def test_max_bytes_too_small_returns_false(self):
+        """Ensure max_bytes < MIN_MAX_BYTES + PAGE_MARKER_SAFE_BYTES returns False without sending."""
+        cfg = _config(synology_chat_webhook_url=self.WEBHOOK, synology_chat_max_bytes=50)
+        sender = SynologyChatSender(cfg)
+        content = "第" * 100
+
+        result = sender.send_to_synology_chat(content)
+
+        self.assertFalse(result)
 
 
 class TestEmailSender(unittest.TestCase):

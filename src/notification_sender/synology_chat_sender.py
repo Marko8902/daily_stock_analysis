@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from src.config import Config
+from src.formatters import MIN_MAX_BYTES, PAGE_MARKER_SAFE_BYTES, chunk_content_by_max_bytes
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class SynologyChatSender:
 	def __init__(self, config: Config):
 		self._synology_chat_webhook_url = getattr(config, "synology_chat_webhook_url", None)
 		self._webhook_verify_ssl = getattr(config, "webhook_verify_ssl", True)
+		self._synology_chat_max_bytes = getattr(config, "synology_chat_max_bytes", 4000)
 
 	def _is_synology_chat_configured(self) -> bool:
 		return resolve_synology_chat_webhook_url(self._synology_chat_webhook_url) is not None
@@ -68,6 +70,53 @@ class SynologyChatSender:
 		if title:
 			text = f"**{title}**\n\n{content}"
 
+		# Synology Chat 单条消息存在长度上限（超长时服务端返回
+		# {"success": false, "error": {"code": 410, "errors": "msg too long"}}），
+		# 因此仅在内容超过字节上限时才按 UTF-8 字节智能分片、拆成多条依次发送，
+		# 普通短消息保持单条发送、不追加分页标记。
+		max_bytes = max(self._synology_chat_max_bytes, MIN_MAX_BYTES)
+		if len(text.encode("utf-8")) <= max_bytes:
+			if self._post_once(endpoint, text, timeout_seconds=timeout_seconds):
+				logger.info("Synology Chat 消息发送成功")
+				return True
+			return False
+
+		# 检查是否有足够预算安全分页（需减去 PAGE_MARKER_SAFE_BYTES）
+		min_chunk_bytes = MIN_MAX_BYTES + PAGE_MARKER_SAFE_BYTES
+		if max_bytes < min_chunk_bytes:
+			logger.error(
+				"Synology Chat 单条消息字节限制过小(%s 字节)，不足以安全分页，至少需要 %s 字节",
+				max_bytes,
+				min_chunk_bytes,
+			)
+			return False
+
+		try:
+			chunks = chunk_content_by_max_bytes(text, max_bytes, add_page_marker=True)
+		except (ValueError, TypeError) as exc:
+			logger.error("Synology Chat 消息分片失败: %s", type(exc).__name__)
+			return False
+
+		total = len(chunks)
+		logger.info("Synology Chat 消息超长，将分 %d 条发送", total)
+		for index, chunk in enumerate(chunks):
+			if not self._post_once(endpoint, chunk, timeout_seconds=timeout_seconds):
+				logger.error(
+					"Synology Chat 第 %d/%d 条消息发送失败", index + 1, total
+				)
+				return False
+
+		logger.info("Synology Chat 消息发送成功（共 %d 条）", total)
+		return True
+
+	def _post_once(
+		self,
+		endpoint: str,
+		text: str,
+		*,
+		timeout_seconds: Optional[float] = None,
+	) -> bool:
+		"""Send a single Synology Chat message and interpret the response."""
 		# Synology Chat 标准 Incoming Webhook 要求 application/x-www-form-urlencoded，
 		# body 为 payload=<URL 编码后的 JSON>，JSON 至少包含 text 字段。
 		payload = json.dumps({"text": text}, ensure_ascii=False)
@@ -90,7 +139,6 @@ class SynologyChatSender:
 				if isinstance(body, dict) and body.get("success") is False:
 					logger.error("Synology Chat 请求被拒绝: %s", body.get("error"))
 					return False
-				logger.info("Synology Chat 消息发送成功")
 				return True
 
 			logger.error("Synology Chat 请求失败: HTTP %s", response.status_code)

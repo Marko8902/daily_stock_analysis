@@ -211,6 +211,8 @@ Synology Chat 是一等通知渠道，使用 Synology Chat 的标准 Incoming We
 SYNOLOGY_CHAT_WEBHOOK_URL=https://nas.example:5001/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token="xxx"
 ```
 
+Synology Chat 单条消息有长度上限（超长时服务端返回 `code 410`）。系统会在内容超过 `SYNOLOGY_CHAT_MAX_BYTES`（默认 4000 字节）时按 UTF-8 字节智能分片、拆成多条依次发送并追加分页标记；短消息仍保持单条发送、不追加分页标记。
+
 NapCat / OneBot HTTP API 需要按实际 endpoint 和目标类型调整。下面只是常见 body 形态示例，`user_id`、`group_id`、URL 路径和鉴权方式都应以你的 NapCat 配置为准：
 
 ```env

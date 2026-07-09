@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
-- [新功能] 新增 Synology Chat 通知渠道（标准 Incoming Webhook，`SYNOLOGY_CHAT_WEBHOOK_URL`），支持本地、Docker 与 GitHub Actions env 映射。
+- [新功能] 新增 Synology Chat 通知渠道（标准 Incoming Webhook，`SYNOLOGY_CHAT_WEBHOOK_URL`），支持本地、Docker 与 GitHub Actions env 映射，超长消息按 `SYNOLOGY_CHAT_MAX_BYTES`（默认 4000 字节）自动分条发送以规避 code 410 限制。
 
 - [修复] 修复日股/韩股历史列表重建市场阶段摘要时将 non_trading 等结果阶段误传为 analysis_phase 导致列表查询失败的问题。
 - [新功能] 支持 SCHEDULE_TIMES 多时间定时推送，并让 Web/API/Desktop 长运行进程保存调度配置后热启停或重建 runtime scheduler。
