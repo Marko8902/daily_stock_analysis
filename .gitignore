@@ -92,3 +92,6 @@ docs/specs/
 .vs/
 .idea/
 *.user
+
+# Git 打包产物
+*.bundle
