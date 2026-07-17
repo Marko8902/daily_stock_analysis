@@ -1,15 +1,17 @@
 import type React from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, Clock, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, ChevronDown, CircleAlert, CircleDashed, Clock, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useAuth, useSystemConfig } from '../hooks';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { createParsedApiError, getParsedApiError, type ParsedApiError } from '../api/error';
+import { analysisApi } from '../api/analysis';
 import { alphasiftApi, notifyAlphaSiftConfigChanged, notifySystemConfigChanged } from '../api/alphasift';
 import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, ConfirmDialog, EmptyState } from '../components/common';
 import {
   AuthSettingsCard,
   ChangePasswordCard,
+  GenerationBackendStatusPanel,
   IntelligentImport,
   LLMChannelEditor,
   NotificationTestPanel,
@@ -21,10 +23,13 @@ import {
   SettingsSectionCard,
 } from '../components/settings';
 import { WEB_BUILD_INFO } from '../utils/constants';
-import { getCategoryDescription } from '../utils/systemConfigI18n';
+import { parseStockListValue } from '../utils/stockList';
+import { getCategoryDescription, getCategoryTitle } from '../utils/systemConfigI18n';
 import type {
   ConfigValidationIssue,
   SchedulerStatusResponse,
+  SetupStatusCheck,
+  SetupStatusResponse,
   SystemConfigCategory,
   SystemConfigItem,
   SystemConfigUpdateItem,
@@ -81,6 +86,86 @@ type DesktopUpdateNotice = {
   actionLabel?: string;
   actionKind?: 'release' | 'install';
 };
+
+const LLM_CHANNEL_EDITOR_RUNTIME_KEYS = new Set([
+  'LITELLM_MODEL',
+  'LITELLM_FALLBACK_MODELS',
+  'AGENT_LITELLM_MODEL',
+  'VISION_MODEL',
+  'LLM_TEMPERATURE',
+]);
+const GENERATION_BACKEND_STATUS_KEYS = new Set([
+  'GENERATION_BACKEND',
+  'GENERATION_FALLBACK_BACKEND',
+  'GENERATION_BACKEND_TIMEOUT_SECONDS',
+  'GENERATION_BACKEND_MAX_OUTPUT_BYTES',
+  'GENERATION_BACKEND_MAX_CONCURRENCY',
+  'LOCAL_CLI_BACKEND_MAX_CONCURRENCY',
+  'OPENCODE_CLI_MODEL',
+  'LITELLM_CONFIG',
+  'LITELLM_MODEL',
+  'LITELLM_FALLBACK_MODELS',
+  'GEMINI_API_KEY',
+  'GEMINI_API_KEYS',
+  'GEMINI_MODEL',
+  'GEMINI_MODEL_FALLBACK',
+  'GEMINI_TEMPERATURE',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_API_KEYS',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_TEMPERATURE',
+  'ANTHROPIC_MAX_TOKENS',
+  'OPENAI_API_KEY',
+  'OPENAI_API_KEYS',
+  'OPENAI_BASE_URL',
+  'OPENAI_MODEL',
+  'OPENAI_VISION_MODEL',
+  'OPENAI_TEMPERATURE',
+  'OLLAMA_API_BASE',
+  'OLLAMA_MODEL',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_API_KEYS',
+  'AIHUBMIX_KEY',
+  'ANSPIRE_LLM_ENABLED',
+  'ANSPIRE_LLM_BASE_URL',
+  'ANSPIRE_LLM_MODEL',
+  'ANSPIRE_API_KEYS',
+]);
+const LLM_CHANNEL_STATUS_KEY_PATTERN = /^LLM_[A-Z0-9_]+_(PROTOCOL|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$/;
+
+function isLlmChannelEditorDraftKey(key: string): boolean {
+  const normalized = key.trim().toUpperCase();
+  return normalized.startsWith('LLM_') || LLM_CHANNEL_EDITOR_RUNTIME_KEYS.has(normalized);
+}
+
+function isGenerationBackendStatusDraftKey(key: string): boolean {
+  const normalized = key.trim().toUpperCase();
+  return (
+    GENERATION_BACKEND_STATUS_KEYS.has(normalized)
+    || normalized === 'LLM_CHANNELS'
+    || LLM_CHANNEL_STATUS_KEY_PATTERN.test(normalized)
+  );
+}
+
+function mergeGenerationBackendDraftItems(
+  outerItems: SystemConfigUpdateItem[],
+  llmChannelItems: SystemConfigUpdateItem[],
+): SystemConfigUpdateItem[] {
+  const merged = new Map<string, SystemConfigUpdateItem>();
+  for (const item of outerItems) {
+    const normalizedKey = item.key.trim().toUpperCase();
+    if (isGenerationBackendStatusDraftKey(normalizedKey)) {
+      merged.set(normalizedKey, item);
+    }
+  }
+  for (const item of llmChannelItems) {
+    const normalizedKey = item.key.trim().toUpperCase();
+    if (isLlmChannelEditorDraftKey(normalizedKey) && isGenerationBackendStatusDraftKey(normalizedKey)) {
+      merged.set(normalizedKey, item);
+    }
+  }
+  return Array.from(merged.values());
+}
 
 const PROMPT_CACHE_ADVANCED_SETTING_KEYS = new Set([
   'LLM_PROMPT_CACHE_TELEMETRY_ENABLED',
@@ -239,9 +324,208 @@ function getConfigItem(items: SystemConfigItem[], key: string) {
   return items.find((item) => item.key === key);
 }
 
+function parseSetupStockList(value: unknown) {
+  return parseStockListValue(String(value ?? ''));
+}
+
 function isEnabledConfigValue(value: unknown) {
   return String(value ?? '').trim().toLowerCase() === 'true';
 }
+
+function getSetupCheckIcon(check: SetupStatusCheck) {
+  if (check.status === 'configured' || check.status === 'inherited') {
+    return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />;
+  }
+  if (check.status === 'needs_action') {
+    return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />;
+  }
+  return <CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-muted-text" aria-hidden="true" />;
+}
+
+function getSetupCheckStatusLabel(
+  check: SetupStatusCheck,
+  t: (key: UiTextKey, params?: Record<string, string | number>) => string,
+) {
+  if (check.status === 'configured') return t('settings.setupStatusConfigured');
+  if (check.status === 'inherited') return t('settings.setupStatusInherited');
+  if (check.status === 'needs_action') return t('settings.setupStatusNeedsAction');
+  return t('settings.setupStatusOptional');
+}
+
+type FirstRunSetupCardProps = {
+  status: SetupStatusResponse | null;
+  isLoading: boolean;
+  error: ParsedApiError | null;
+  firstStockCode: string;
+  isSaving: boolean;
+  isRunningSmoke: boolean;
+  smokeError: ParsedApiError | null;
+  smokeSuccess: string;
+  onRefresh: () => void | Promise<void>;
+  onSelectCategory: (category: SystemConfigCategory) => void;
+  onRunSmoke: () => void | Promise<void>;
+  listSeparator: string;
+  t: (key: UiTextKey, params?: Record<string, string | number>) => string;
+};
+
+const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
+  status,
+  isLoading,
+  error,
+  firstStockCode,
+  isSaving,
+  isRunningSmoke,
+  smokeError,
+  smokeSuccess,
+  onRefresh,
+  onSelectCategory,
+  onRunSmoke,
+  listSeparator,
+  t,
+}) => {
+  const [isHidden, setIsHidden] = useState(false);
+  const requiredMissing = status?.checks.filter((check) => check.required && check.status === 'needs_action') || [];
+  const isComplete = Boolean(status?.isComplete);
+  const canRunSmoke = Boolean(status?.readyForSmoke && firstStockCode);
+  const summaryTitle = !status
+    ? error
+      ? t('settings.setupGuideUnknownTitle')
+      : t('settings.setupGuideCheckingTitle')
+    : isComplete
+      ? t('settings.setupGuideCompleteTitle')
+      : t('settings.setupGuideIncompleteTitle');
+  const summaryMessage = !status
+    ? error
+      ? t('settings.setupGuideUnknownSummary')
+      : t('settings.setupGuideCheckingSummary')
+    : requiredMissing.length
+      ? t('settings.setupGuideMissingSummary', {
+        count: requiredMissing.length,
+        labels: requiredMissing.slice(0, 3).map((check) => check.title).join(listSeparator),
+      })
+      : t('settings.setupGuideReadySummary');
+
+  if (isHidden) {
+    return (
+      <div className="rounded-2xl border settings-border bg-card/90 px-4 py-3 shadow-soft-card">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-foreground">{t('settings.setupGuideHiddenTitle')}</p>
+            <p className="mt-1 text-xs leading-5 text-muted-text">{t('settings.setupGuideHiddenDescription')}</p>
+          </div>
+          <Button type="button" variant="settings-secondary" size="sm" onClick={() => setIsHidden(false)}>
+            {t('settings.setupGuideOpen')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <SettingsSectionCard
+      title={t('settings.setupGuideTitle')}
+      description={t('settings.setupGuideDescription')}
+    >
+      <div data-testid="first-run-setup-card" className="space-y-4">
+        <div className="flex flex-col gap-3 rounded-2xl border settings-border bg-background/35 px-4 py-4 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">
+              {summaryTitle}
+            </p>
+            <p className="mt-1 text-xs leading-6 text-muted-text">
+              {summaryMessage}
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="settings-secondary"
+              size="sm"
+              disabled={isLoading}
+              isLoading={isLoading}
+              loadingText={t('settings.setupGuideRefreshing')}
+              onClick={() => void onRefresh()}
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              {t('settings.setupGuideRefresh')}
+            </Button>
+            <Button type="button" variant="settings-secondary" size="sm" onClick={() => setIsHidden(true)}>
+              {t('settings.setupGuideHide')}
+            </Button>
+          </div>
+        </div>
+
+        {error ? <ApiErrorAlert error={error} /> : null}
+
+        {isLoading && !status ? (
+          <p className="text-sm text-muted-text">{t('common.loading')}</p>
+        ) : null}
+
+        {status ? (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {status.checks.map((check) => (
+              <div
+                key={check.key}
+                className="rounded-2xl border settings-border bg-card/65 px-4 py-3"
+              >
+                <div className="flex items-start gap-3">
+                  {getSetupCheckIcon(check)}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-foreground">{check.title}</p>
+                      <span className="rounded-full border settings-border bg-background/60 px-2 py-0.5 text-[11px] font-medium text-muted-text">
+                        {getSetupCheckStatusLabel(check, t)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-muted-text">{check.message}</p>
+                    {check.nextStep ? (
+                      <p className="mt-2 text-xs leading-5 text-secondary-text">{check.nextStep}</p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('ai_model')}>
+            {t('settings.setupGuideConfigureLlm')}
+          </Button>
+          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('base')}>
+            {t('settings.setupGuideAddStocks')}
+          </Button>
+          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('notification')}>
+            {t('settings.setupGuideConfigureNotification')}
+          </Button>
+          <Button
+            type="button"
+            variant="settings-primary"
+            size="sm"
+            disabled={!canRunSmoke || isSaving || isRunningSmoke}
+            isLoading={isRunningSmoke}
+            loadingText={t('settings.setupGuideSmokeRunning')}
+            title={!firstStockCode ? t('settings.setupGuideSmokeNeedsStock') : undefined}
+            onClick={() => void onRunSmoke()}
+          >
+            <Play className="h-4 w-4" aria-hidden="true" />
+            {t('settings.setupGuideRunSmoke')}
+          </Button>
+        </div>
+
+        {!canRunSmoke && status ? (
+          <p className="text-xs leading-6 text-muted-text">
+            {firstStockCode ? t('settings.setupGuideSmokeNotReady') : t('settings.setupGuideSmokeNeedsStock')}
+          </p>
+        ) : null}
+        {smokeError ? <ApiErrorAlert error={smokeError} /> : null}
+        {!smokeError && smokeSuccess ? (
+          <SettingsAlert title={t('settings.actionSuccess')} message={smokeSuccess} variant="success" />
+        ) : null}
+      </div>
+    </SettingsSectionCard>
+  );
+};
 
 function parseScheduleTimes(scheduleTimesValue?: string, fallbackValue?: string) {
   const values = String(scheduleTimesValue ?? '')
@@ -335,17 +619,6 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
     }
     void refreshSchedulerStatus();
   }, [hasSchedulerSettings, refreshSchedulerStatus, statusRefreshToken]);
-
-  useEffect(() => {
-    const isRuntimeDerived = isEnabledConfigValue(scheduleEnabledItem?.value) === status?.enabled;
-    if (!status) {
-      return;
-    }
-
-    if (scheduleEnabledOverride === null && isRuntimeDerived) {
-      setScheduleEnabledOverride(null);
-    }
-  }, [scheduleEnabledItem?.value, scheduleEnabledOverride, statusRefreshToken]);
 
   useEffect(() => {
     if (!onSchedulerStateChange) {
@@ -586,7 +859,15 @@ const SettingsPage: React.FC = () => {
   const [schedulerStatusRefreshToken, setSchedulerStatusRefreshToken] = useState(0);
   const [schedulerRuntimeEnabled, setSchedulerRuntimeEnabled] = useState<boolean | null>(null);
   const [schedulerOverrideFromUi, setSchedulerOverrideFromUi] = useState<boolean | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatusResponse | null>(null);
+  const [isRefreshingSetupStatus, setIsRefreshingSetupStatus] = useState(false);
+  const [setupStatusError, setSetupStatusError] = useState<ParsedApiError | null>(null);
+  const [isRunningSetupSmoke, setIsRunningSetupSmoke] = useState(false);
+  const [setupSmokeError, setSetupSmokeError] = useState<ParsedApiError | null>(null);
+  const [setupSmokeSuccess, setSetupSmokeSuccess] = useState('');
+  const [llmChannelDraftItems, setLlmChannelDraftItems] = useState<SystemConfigUpdateItem[]>([]);
   const envBackupImportRef = useRef<HTMLInputElement | null>(null);
+  const setupStatusRequestIdRef = useRef(0);
   const desktopRuntimeApi = getDesktopRuntimeApi();
   const isDesktopRuntime = Boolean(desktopRuntimeApi);
   const canCheckDesktopUpdate = Boolean(
@@ -627,10 +908,48 @@ const SettingsPage: React.FC = () => {
   } = useSystemConfig();
 
   const currentChangedItems = getChangedItems();
+  const currentChangedItemsFingerprint = JSON.stringify(currentChangedItems);
+  const llmChannelDraftItemsFingerprint = JSON.stringify(llmChannelDraftItems);
+  const generationBackendDraftItems = useMemo(
+    () => mergeGenerationBackendDraftItems(currentChangedItems, llmChannelDraftItems),
+    // Fingerprints keep the status panel from refreshing when parent renders do not change draft content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentChangedItemsFingerprint, llmChannelDraftItemsFingerprint],
+  );
+  const handleLlmChannelDraftItemsChange = useCallback((items: Array<{ key: string; value: string }>) => {
+    setLlmChannelDraftItems(items);
+  }, []);
+
+  const refreshSetupStatus = useCallback(async () => {
+    const requestId = setupStatusRequestIdRef.current + 1;
+    setupStatusRequestIdRef.current = requestId;
+    setSetupStatusError(null);
+    setIsRefreshingSetupStatus(true);
+    try {
+      const status = await systemConfigApi.getSetupStatus();
+      if (setupStatusRequestIdRef.current !== requestId) {
+        return;
+      }
+      setSetupStatus(status);
+    } catch (error: unknown) {
+      if (setupStatusRequestIdRef.current !== requestId) {
+        return;
+      }
+      setSetupStatusError(getParsedApiError(error));
+    } finally {
+      if (setupStatusRequestIdRef.current === requestId) {
+        setIsRefreshingSetupStatus(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void refreshSetupStatus();
+  }, [refreshSetupStatus]);
 
   useEffect(() => {
     if (!toast) {
@@ -692,8 +1011,11 @@ const SettingsPage: React.FC = () => {
 
   const rawActiveItems = itemsByCategory[activeCategory] || [];
   const rawActiveItemMap = new Map(rawActiveItems.map((item) => [item.key, String(item.value ?? '')]));
+  const firstSetupStockCode = parseSetupStockList(getConfigItem(itemsByCategory.base || [], 'STOCK_LIST')?.value)[0] || '';
   const alphasiftItem = (itemsByCategory.data_source || []).find((item) => item.key === 'ALPHASIFT_ENABLED');
   const alphasiftEnabled = String(alphasiftItem?.value ?? '').trim().toLowerCase() === 'true';
+  const shouldShowFirstRunSetup = activeCategory === 'base';
+  const shouldShowAlphaSiftSettings = activeCategory === 'data_source' && Boolean(alphasiftItem);
   const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim());
   const hasLitellmConfig = Boolean((rawActiveItemMap.get('LITELLM_CONFIG') || '').trim());
   const hasRuntimeSchedulerMismatch =
@@ -845,6 +1167,7 @@ const SettingsPage: React.FC = () => {
         setSchedulerStatusRefreshToken((current) => current + 1);
       }
       notifySystemConfigChanged();
+      void refreshSetupStatus();
       setEnvBackupActionSuccess(t('settings.envImported'));
     } catch (error: unknown) {
       setEnvBackupActionError(getParsedApiError(error));
@@ -928,6 +1251,7 @@ const SettingsPage: React.FC = () => {
     if (changedSchedulerSettings) {
       setSchedulerStatusRefreshToken((current) => current + 1);
     }
+    void refreshSetupStatus();
     if (!changedAlphaSiftItem) {
       return;
     }
@@ -985,6 +1309,54 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleRunSetupSmoke = async () => {
+    setSetupSmokeError(null);
+    setSetupSmokeSuccess('');
+
+    if (!setupStatus?.readyForSmoke) {
+      setSetupSmokeError(createParsedApiError({
+        title: t('settings.setupGuideSmokeUnavailableTitle'),
+        message: t('settings.setupGuideSmokeNotReady'),
+        rawMessage: t('settings.setupGuideSmokeNotReady'),
+        category: 'missing_params',
+      }));
+      return;
+    }
+
+    if (!firstSetupStockCode) {
+      setSetupSmokeError(createParsedApiError({
+        title: t('settings.setupGuideSmokeUnavailableTitle'),
+        message: t('settings.setupGuideSmokeNeedsStock'),
+        rawMessage: t('settings.setupGuideSmokeNeedsStock'),
+        category: 'missing_params',
+      }));
+      return;
+    }
+
+    setIsRunningSetupSmoke(true);
+    try {
+      const result = await analysisApi.analyzeAsync({
+        stockCode: firstSetupStockCode,
+        reportType: 'brief',
+        asyncMode: true,
+        notify: false,
+        originalQuery: firstSetupStockCode,
+        selectionSource: 'manual',
+      });
+      const taskId = 'taskId' in result ? result.taskId : result.accepted?.[0]?.taskId;
+      setSetupSmokeSuccess(
+        taskId
+          ? t('settings.setupGuideSmokeAcceptedWithTask', { stock: firstSetupStockCode, taskId })
+          : t('settings.setupGuideSmokeAccepted', { stock: firstSetupStockCode }),
+      );
+      void refreshSetupStatus();
+    } catch (error: unknown) {
+      setSetupSmokeError(getParsedApiError(error));
+    } finally {
+      setIsRunningSetupSmoke(false);
+    }
+  };
+
   const desktopUpdateNotice = getDesktopUpdateNotice(desktopUpdateState, t);
   const shouldGuardActiveConfigPanel = activeCategory === 'notification' || activeCategory === 'agent';
   const activeConfigPanelErrorTitle = activeCategory === 'agent' ? t('settings.agentSettings') : t('settings.notificationSettings');
@@ -993,24 +1365,30 @@ const SettingsPage: React.FC = () => {
       ? <>Check and provide the desktop log <code>desktop.log</code>, plus the release version, Windows version, and trigger path.</>
       : <>请查看并提供桌面端日志 <code>desktop.log</code>，同时补充 release 版本、Windows 版本和触发入口。</>
     : t('settings.diagnosticHintWeb');
+  const activeCategoryTitle = getCategoryTitle(activeCategory as SystemConfigCategory, t('settings.activePanelTitle'), uiLanguage);
+  const activeCategoryDescription = getCategoryDescription(activeCategory as SystemConfigCategory, '', uiLanguage);
   const activeConfigPanel = hasActiveConfigItems ? (
     <SettingsSectionCard
-      title={t('settings.activePanelTitle')}
-      description={getCategoryDescription(activeCategory as SystemConfigCategory, '', uiLanguage) || t('settings.activePanelDescription')}
+      title={activeCategoryTitle}
+      description={activeCategoryDescription || t('settings.activePanelDescription')}
     >
-      {visibleActiveItems.map((item) => (
-        <SettingsField
-          key={item.key}
-          item={item}
-          value={item.value}
-          disabled={isSaving}
-          onChange={setDraftValue}
-          issues={issueByKey[item.key] || []}
-        />
-      ))}
+      {visibleActiveItems.length ? (
+        <div className="divide-y divide-[var(--settings-border-soft)] overflow-hidden rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface)]">
+          {visibleActiveItems.map((item) => (
+            <SettingsField
+              key={item.key}
+              item={item}
+              value={item.value}
+              disabled={isSaving}
+              onChange={setDraftValue}
+              issues={issueByKey[item.key] || []}
+            />
+          ))}
+        </div>
+      ) : null}
       {promptCacheAdvancedItems.length ? (
-        <details className="group/prompt-cache rounded-[1.15rem] border border-[var(--settings-border)] bg-[var(--settings-surface)] p-4 shadow-soft-card transition-[background-color,border-color,box-shadow] duration-200 hover:border-[var(--settings-border-strong)] hover:bg-[var(--settings-surface-hover)]">
-          <summary className="flex cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
+        <details className="group/prompt-cache overflow-hidden rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface)] transition-colors duration-200 hover:bg-[var(--settings-surface-hover)]">
+          <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-4 [&::-webkit-details-marker]:hidden">
             <div className="min-w-0 space-y-1">
               <p className="text-sm font-semibold text-foreground">
                 {t('settings.promptCacheAdvancedTitle')}
@@ -1021,7 +1399,7 @@ const SettingsPage: React.FC = () => {
             </div>
             <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-text transition-transform group-open/prompt-cache:rotate-180" aria-hidden="true" />
           </summary>
-          <div className="mt-4 space-y-4">
+          <div className="divide-y divide-[var(--settings-border-soft)] border-t border-[var(--settings-border-soft)]">
             {promptCacheAdvancedItems.map((item) => (
               <SettingsField
                 key={item.key}
@@ -1046,11 +1424,11 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="settings-page min-h-full px-4 pb-6 pt-4 md:px-6">
-      <div className="mb-5 rounded-[1.5rem] border settings-border bg-card/94 px-5 py-5 shadow-soft-card-strong backdrop-blur-sm">
+      <div className="mb-4 rounded-lg border settings-border bg-card/90 px-4 py-4 shadow-soft-card backdrop-blur-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight text-foreground">{t('settings.pageTitle')}</h1>
-            <p className="text-xs leading-6 text-muted-text">
+            <p className="max-w-3xl text-xs leading-5 text-muted-text sm:text-sm sm:leading-6">
               {t('settings.pageDescription')}
             </p>
           </div>
@@ -1059,25 +1437,31 @@ const SettingsPage: React.FC = () => {
             <Button
               type="button"
               variant="settings-secondary"
+              size="sm"
+              className="px-2.5"
               onClick={resetDraft}
               disabled={isLoading || isSaving}
             >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
               {t('settings.reset')}
             </Button>
-              <Button
-                type="button"
-                variant="settings-primary"
-                onClick={() => void handleSaveConfig()}
-                disabled={!effectiveHasDirty || isSaving || isLoading}
-                isLoading={isSaving}
-                loadingText={t('settings.saving')}
-              >
-                {isSaving
-                  ? t('settings.saving')
-                  : effectiveDirtyCount
-                    ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
-                    : t('settings.saveConfig')}
-              </Button>
+            <Button
+              type="button"
+              variant="settings-primary"
+              size="sm"
+              className="px-2.5"
+              onClick={() => void handleSaveConfig()}
+              disabled={!effectiveHasDirty || isSaving || isLoading}
+              isLoading={isSaving}
+              loadingText={t('settings.saving')}
+            >
+              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+              {isSaving
+                ? t('settings.saving')
+                : effectiveDirtyCount
+                  ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
+                  : t('settings.saveConfig')}
+            </Button>
           </div>
         </div>
 
@@ -1103,7 +1487,7 @@ const SettingsPage: React.FC = () => {
       {isLoading ? (
         <SettingsLoading />
       ) : (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="lg:sticky lg:top-4 lg:self-start">
             <SettingsCategoryNav
               categories={categories}
@@ -1114,7 +1498,24 @@ const SettingsPage: React.FC = () => {
           </aside>
 
           <section className="space-y-4">
-            {alphasiftItem ? (
+            {shouldShowFirstRunSetup ? (
+              <FirstRunSetupCard
+                status={setupStatus}
+                isLoading={isRefreshingSetupStatus}
+                error={setupStatusError}
+                firstStockCode={firstSetupStockCode}
+                isSaving={isSaving}
+                isRunningSmoke={isRunningSetupSmoke}
+                smokeError={setupSmokeError}
+                smokeSuccess={setupSmokeSuccess}
+                onRefresh={refreshSetupStatus}
+                onSelectCategory={setActiveCategory}
+                onRunSmoke={handleRunSetupSmoke}
+                listSeparator={uiLanguage === 'en' ? ', ' : '、'}
+                t={t}
+              />
+            ) : null}
+            {shouldShowAlphaSiftSettings ? (
               <SettingsSectionCard
                 title={t('settings.alphaSift')}
                 description={t('settings.alphaSiftDescription')}
@@ -1344,6 +1745,7 @@ const SettingsPage: React.FC = () => {
                   maskToken={maskToken}
                   onMerged={async () => {
                     await refreshAfterExternalSave(['STOCK_LIST']);
+                    void refreshSetupStatus();
                   }}
                   disabled={isSaving || isLoading}
                 />
@@ -1354,12 +1756,20 @@ const SettingsPage: React.FC = () => {
                 title={t('settings.llmAccess')}
                 description={t('settings.llmAccessDescription')}
               >
+                <GenerationBackendStatusPanel
+                  items={generationBackendDraftItems}
+                  maskToken={maskToken}
+                  disabled={isSaving || isLoading}
+                />
                 <LLMChannelEditor
                   items={rawActiveItems}
                   configVersion={configVersion}
                   maskToken={maskToken}
+                  onDraftItemsChange={handleLlmChannelDraftItemsChange}
                   onSaved={async (updatedItems) => {
+                    setLlmChannelDraftItems([]);
                     await refreshAfterExternalSave(updatedItems.map((item) => item.key));
+                    void refreshSetupStatus();
                   }}
                   disabled={isSaving || isLoading}
                 />

@@ -14,6 +14,7 @@ from api.v1.schemas.stocks import StockQuote
 
 DECISION_SIGNAL_PATHS = (
     "/api/v1/decision-signals",
+    "/api/v1/decision-signals/reassess",
     "/api/v1/decision-signals/outcomes/run",
     "/api/v1/decision-signals/outcomes",
     "/api/v1/decision-signals/outcomes/stats",
@@ -36,7 +37,12 @@ DECISION_SIGNAL_SCHEMAS = (
     "DecisionSignalOutcomeRunResponse",
     "DecisionSignalOutcomeStatsBucket",
     "DecisionSignalOutcomeStatsResponse",
+    "DecisionSignalPreview",
+    "DecisionSignalReassessErrorResponse",
+    "DecisionSignalReassessRequest",
+    "DecisionSignalReassessResponse",
     "DecisionSignalStatusUpdateRequest",
+    "DecisionSignalWarning",
 )
 P6_SIGNAL_LINKED_PATHS = (
     "/api/v1/alerts/triggers",
@@ -107,6 +113,20 @@ def test_request_models_accept_report_language_camel_case_alias() -> None:
         "reportLanguage": "en",
     })
     assert market_review_request.report_language == "en"
+
+
+def test_request_models_accept_korean_report_language() -> None:
+    analyze_request = AnalyzeRequest.model_validate({
+        "stock_code": "005930.KS",
+        "report_language": "ko",
+    })
+    assert analyze_request.report_language == "ko"
+
+    market_review_request = MarketReviewRequest.model_validate({
+        "send_notification": False,
+        "report_language": "ko",
+    })
+    assert market_review_request.report_language == "ko"
 
 
 def test_analyze_request_analysis_phase_defaults_to_auto() -> None:
